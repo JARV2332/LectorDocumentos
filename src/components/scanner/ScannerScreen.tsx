@@ -3,12 +3,14 @@
 import { useCallback, useRef, useState } from "react";
 import { CameraView } from "@/components/camera/CameraView";
 import { BottomNav } from "@/components/ui/BottomNav";
+import { ManualBarcodeSheet } from "@/components/scanner/ManualBarcodeSheet";
 import { ResultSheet } from "@/components/scanner/ResultSheet";
 import { ScanDebugPanel } from "@/components/scanner/ScanDebugPanel";
+import { useBarcodeWedge } from "@/hooks/useBarcodeWedge";
 import { useCamera } from "@/hooks/useCamera";
 import { useBarcodeScanner } from "@/hooks/useBarcodeScanner";
 import { scanDpiNow, useMrzOcr } from "@/hooks/useMrzOcr";
-import type { CameraStatus, ScanMode, ScanResult } from "@/lib/types/documents";
+import type { CameraStatus, LicenseScanResult, ScanMode, ScanResult } from "@/lib/types/documents";
 import type { LicenseScanDebug } from "@/lib/types/scanDebug";
 import { yieldToMain } from "@/lib/utils/yieldToMain";
 import { imageToCanvas, loadImageFromFile } from "@/lib/utils/videoReady";
@@ -48,15 +50,16 @@ export function ScannerScreen() {
   const [mode, setMode] = useState<ScanMode>("license");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [manualSheetOpen, setManualSheetOpen] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("Abriendo cámara...");
+  const [statusMessage, setStatusMessage] = useState("Preparando...");
   const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
   const [scanDebug, setScanDebug] = useState<LicenseScanDebug | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const scanPaused = isProcessingPhoto || sheetOpen;
+  const scanPaused = isProcessingPhoto || sheetOpen || manualSheetOpen;
 
   const { videoRef, status, error, start, stop, captureFrame } = useCamera({
     enabled: cameraEnabled,
@@ -81,10 +84,36 @@ export function ScannerScreen() {
     [stop],
   );
 
+  const handleLicenseFromBarcode = useCallback(
+    (result: LicenseScanResult) => {
+      setScanDebug({
+        pdf417Raw: result.rawBarcode.slice(0, 180),
+        source: "wedge",
+        regionsScanned: 0,
+        decodeAttempts: 0,
+        topBarcodeRaw: "",
+        qrRaw: "",
+        nativeBarcodeRaw: "",
+      });
+      handleDetected(result);
+    },
+    [handleDetected],
+  );
+
+  useBarcodeWedge({
+    enabled: mode === "license" && !scanPaused,
+    onDetected: handleLicenseFromBarcode,
+    onScanning: (length) => {
+      if (length > 3) {
+        setStatusMessage("Recibiendo escaneo del lector...");
+      }
+    },
+  });
+
   useBarcodeScanner({
     videoRef,
     captureFrame,
-    enabled: cameraEnabled && mode === "license" && status === "active" && !scanPaused,
+    enabled: false,
     onDetected: handleDetected,
     onStatus: setStatusMessage,
   });
@@ -105,19 +134,29 @@ export function ScannerScreen() {
     setMode(nextMode);
     setScanResult(null);
     setSheetOpen(false);
+    setManualSheetOpen(false);
     setShowSuccess(false);
     setScanDebug(null);
     setCameraEnabled(true);
-    setStatusMessage("Cambiando modo de escaneo...");
+    setStatusMessage(
+      nextMode === "license"
+        ? "Conecta lector USB y escanea el PDF417 (abajo izquierda)"
+        : "Cambiando modo de escaneo...",
+    );
   };
 
   const handleScanAgain = () => {
     setScanResult(null);
     setSheetOpen(false);
+    setManualSheetOpen(false);
     setShowSuccess(false);
     setScanDebug(null);
     setCameraEnabled(true);
-    setStatusMessage("Preparando cámara...");
+    setStatusMessage(
+      mode === "license"
+        ? "Conecta lector USB y escanea el PDF417 (abajo izquierda)"
+        : "Preparando cámara...",
+    );
     void start();
   };
 
@@ -154,7 +193,7 @@ export function ScannerScreen() {
         }
       }
 
-      setStatusMessage("No se leyó el código. Revisa Debug o intenta otra foto.");
+      setStatusMessage("No se leyó el código. Usa lector USB o pega el texto del PDF417.");
     } finally {
       setIsProcessingPhoto(false);
     }
@@ -192,13 +231,18 @@ export function ScannerScreen() {
         }
       }
 
-      setStatusMessage("Sin lectura completa. Abre Debug para ver detalles.");
+      setStatusMessage("Sin lectura completa. Usa lector USB o pega el código PDF417.");
     } catch {
       setStatusMessage("Error al procesar la imagen.");
     } finally {
       setIsProcessingPhoto(false);
     }
   };
+
+  const licenseStatus =
+    statusMessage === "Preparando..." || statusMessage === "Abriendo cámara..."
+      ? "Conecta lector USB y escanea el PDF417 (abajo izquierda). También puedes pegar el texto."
+      : statusMessage;
 
   return (
     <div className="relative mx-auto flex h-[100dvh] w-full max-w-lg flex-col bg-zinc-950">
@@ -207,7 +251,7 @@ export function ScannerScreen() {
         <p className="text-xs text-white/75">
           {mode === "dpi"
             ? "Reverso del DPI — 3 líneas con IDGTM"
-            : "Reverso licencia — PDF417 izquierda + QR derecha"}
+            : "Licencia — lector USB en PDF417 (izquierda) o pegar código"}
         </p>
       </header>
 
@@ -223,28 +267,65 @@ export function ScannerScreen() {
 
         <div className="absolute bottom-28 left-0 right-0 z-20 space-y-2 px-4">
           <div className="rounded-2xl bg-black/60 px-4 py-2 text-center text-xs font-medium text-white backdrop-blur-sm">
-            {statusMessage}
+            {mode === "license" ? licenseStatus : statusMessage}
           </div>
+
+          {mode === "license" && (
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/50 px-3 py-2 text-[11px] leading-relaxed text-emerald-100">
+              <strong className="text-emerald-300">Más confiable:</strong> lector de barras USB/Bluetooth
+              apuntando al PDF417 grande. Si ya lo escaneaste en otra app, usa &quot;Pegar código&quot;.
+            </div>
+          )}
 
           <ScanDebugPanel debug={scanDebug} />
 
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => void handleManualScan()}
-              disabled={status !== "active" || isProcessingPhoto}
-              className="flex-1 rounded-xl bg-emerald-600 px-3 py-3 text-sm font-semibold text-white disabled:opacity-50 active:scale-[0.98]"
-            >
-              {isProcessingPhoto ? "Procesando..." : "Capturar ahora"}
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenFilePicker}
-              className="rounded-xl bg-white/15 px-3 py-3 text-sm font-semibold text-white backdrop-blur-sm active:scale-[0.98]"
-            >
-              Subir foto
-            </button>
-          </div>
+          {mode === "license" ? (
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setManualSheetOpen(true)}
+                className="w-full rounded-xl bg-emerald-600 px-3 py-3.5 text-sm font-semibold text-white active:scale-[0.98]"
+              >
+                Pegar código PDF417
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenFilePicker}
+                  disabled={isProcessingPhoto}
+                  className="flex-1 rounded-xl bg-white/15 px-3 py-3 text-sm font-semibold text-white backdrop-blur-sm disabled:opacity-50 active:scale-[0.98]"
+                >
+                  Subir foto
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleManualScan()}
+                  disabled={status !== "active" || isProcessingPhoto}
+                  className="flex-1 rounded-xl bg-white/10 px-3 py-3 text-sm font-semibold text-white/90 disabled:opacity-50 active:scale-[0.98]"
+                >
+                  {isProcessingPhoto ? "Procesando..." : "Capturar"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleManualScan()}
+                disabled={status !== "active" || isProcessingPhoto}
+                className="flex-1 rounded-xl bg-emerald-600 px-3 py-3 text-sm font-semibold text-white disabled:opacity-50 active:scale-[0.98]"
+              >
+                {isProcessingPhoto ? "Procesando..." : "Capturar ahora"}
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenFilePicker}
+                className="rounded-xl bg-white/15 px-3 py-3 text-sm font-semibold text-white backdrop-blur-sm active:scale-[0.98]"
+              >
+                Subir foto
+              </button>
+            </div>
+          )}
         </div>
       </main>
 
@@ -256,6 +337,12 @@ export function ScannerScreen() {
         accept="image/*"
         className="hidden"
         onChange={(event) => void handleFileSelected(event)}
+      />
+
+      <ManualBarcodeSheet
+        open={manualSheetOpen}
+        onClose={() => setManualSheetOpen(false)}
+        onParsed={handleLicenseFromBarcode}
       />
 
       <ResultSheet

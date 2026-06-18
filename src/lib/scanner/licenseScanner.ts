@@ -29,6 +29,7 @@ import {
   LICENSE_TOP_BARCODE_REGION,
   upscaleCanvasTo,
 } from "@/lib/utils/imageProcessing";
+import { detectBarcodesOnCanvas } from "@/lib/scanner/nativeBarcodeDetector";
 import type { NormalizedRegion } from "@/lib/utils/objectCover";
 import { yieldToMain } from "@/lib/utils/yieldToMain";
 
@@ -150,25 +151,12 @@ function buildProcessedVariants(canvas: HTMLCanvasElement, exhaustive: boolean):
 async function decodeWithNativeBarcodeDetector(
   canvas: HTMLCanvasElement,
 ): Promise<string | null> {
-  if (typeof window === "undefined" || !("BarcodeDetector" in window)) {
+  const values = await detectBarcodesOnCanvas(canvas);
+  if (values.length === 0) {
     return null;
   }
 
-  try {
-    const Detector = window.BarcodeDetector!;
-    const detector = new Detector({ formats: ["pdf417", "qr_code", "code_128"] });
-    const results = await detector.detect(canvas);
-
-    for (const item of results) {
-      if (item.rawValue) {
-        return item.rawValue;
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
+  return [...values].sort((left, right) => right.length - left.length)[0] ?? null;
 }
 
 function tryDecodePdf417(
@@ -209,7 +197,18 @@ async function scanPdf417OnCanvas(
     await yieldToMain();
 
     const cropped = cropRegion(canvas, region);
-    const raw = tryDecodePdf417(cropped, debug, exhaustive);
+
+    onProgress?.("Probando detector WASM...");
+    const nativeRaw = await decodeWithNativeBarcodeDetector(cropped);
+    let raw = nativeRaw;
+
+    if (nativeRaw) {
+      debug.nativeBarcodeRaw = nativeRaw.slice(0, 180);
+    }
+
+    if (!raw) {
+      raw = tryDecodePdf417(cropped, debug, exhaustive);
+    }
 
     if (!raw) {
       continue;

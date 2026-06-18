@@ -32,24 +32,41 @@ function extractFields(raw: string): Record<string, string> {
   return fields;
 }
 
-function extractCui(fields: Record<string, string>, raw: string): string {
+function extractBirthDateFromFields(fields: Record<string, string>, raw: string): string {
+  const dbd = fields.DBD?.replace(/\D/g, "") ?? "";
+  if (/^\d{8}$/.test(dbd)) {
+    const month = dbd.slice(0, 2);
+    const day = dbd.slice(2, 4);
+    const year = dbd.slice(4, 8);
+    return `${year}-${month}-${day}`;
+  }
+
+  return extractBirthDateFromRaw(raw);
+}
+
+function extractCui(
+  fields: Record<string, string>,
+  raw: string,
+  birthDate = "",
+): string {
+  const customFields = Object.entries(fields).filter(([code]) => code.startsWith("ZG"));
   const candidates = [
-    fields.DAQ,
-    fields.DCK,
+    ...customFields.map(([, value]) => value),
     fields.DCI,
-    fields.ZGT,
-    fields.ZGTCUI,
-    fields.DBD,
+    fields.DCK,
   ].filter(Boolean);
 
   for (const candidate of candidates) {
     const digits = candidate.replace(/\D/g, "");
     if (digits.length === 13 && isValidGuatemalaCui(digits)) {
-      return digits;
+      const validated = findValidCuiInText(digits, birthDate);
+      if (validated) {
+        return validated;
+      }
     }
   }
 
-  return findValidCuiInText(raw);
+  return findValidCuiInText(raw, birthDate);
 }
 
 function extractLicenseType(fields: Record<string, string>): string {
@@ -95,25 +112,12 @@ export function parseAamvaBarcode(rawBarcode: string): LicenseScanResult | null 
       fields.DCT ||
       fallbackNames.nombres,
   );
-  const numeroLicencia = (fields.DAQ ?? fields.DCK ?? fields.DCA ?? "").replace(/\s+/g, "");
-  const cui = extractCui(fields, rawBarcode);
+  const numeroLicencia = (fields.DAQ ?? fields.DCK ?? "").replace(/\s+/g, "").toUpperCase();
+  const fechaNacimiento = extractBirthDateFromFields(fields, rawBarcode);
+  const cui = extractCui(fields, rawBarcode, fechaNacimiento);
   const tipoLicencia = extractLicenseType(fields);
 
   if (!numeroLicencia && !cui && !apellidos && !nombres) {
-    if (rawBarcode.length > 30) {
-      return {
-        type: "license",
-        numeroLicencia: rawBarcode.slice(0, 24).replace(/[^A-Z0-9]/gi, ""),
-        cui,
-        nombres: "",
-        apellidos: "",
-        tipoLicencia: "",
-        fechaNacimiento: "",
-        restricciones: "",
-        tipoSangre: "",
-        rawBarcode,
-      };
-    }
     return null;
   }
 
@@ -124,7 +128,7 @@ export function parseAamvaBarcode(rawBarcode: string): LicenseScanResult | null 
     nombres,
     apellidos,
     tipoLicencia,
-    fechaNacimiento: extractBirthDateFromRaw(rawBarcode),
+    fechaNacimiento,
     restricciones: "",
     tipoSangre: "",
     rawBarcode,

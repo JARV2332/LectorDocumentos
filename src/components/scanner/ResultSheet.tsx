@@ -87,8 +87,8 @@ function ResultForm({
         <>
           {licenseHasPartialData && (
             <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Si faltan nombres o CUI, el PDF417 no se leyó completo. Usa buena luz en el código
-              grande de la izquierda o completa los campos manualmente.
+              Faltan nombre o CUI: la foto no leyó el PDF417. Escanea con lector USB el código grande
+              de la izquierda, usa &quot;Pegar código&quot;, o completa los campos manualmente.
             </p>
           )}
 
