@@ -1,4 +1,10 @@
 import { parseAamvaBarcode } from "@/lib/parsers/aamvaParser";
+import {
+  findLicenseSerialInText,
+  findValidCuiInText,
+  isValidGuatemalaCui,
+  isValidLicenseNumber,
+} from "@/lib/parsers/cuiValidator";
 import type { LicenseScanResult } from "@/lib/types/documents";
 
 function formatName(value: string): string {
@@ -23,18 +29,18 @@ function formatDate(value: string): string {
   return `${year}-${month}-${day}`;
 }
 
-function extractCui(text: string): string {
-  const match = text.replace(/\D/g, " ").match(/\b(\d{13})\b/);
-  return match?.[1] ?? "";
+function sanitizeCui(value: string, birthDate = ""): string {
+  const cleaned = value.replace(/\D/g, "");
+  if (cleaned.length !== 13 || !isValidGuatemalaCui(cleaned)) {
+    return "";
+  }
+
+  return findValidCuiInText(cleaned, birthDate) || "";
 }
 
-function extractLicenseNumber(text: string): string {
-  const labeled =
-    text.match(/(?:LICENCIA|LIC|NO\.?|NUMERO|N[UÚ]MERO)[:\s#]*([A-Z0-9-]{5,20})/i)?.[1] ??
-    text.match(/\b(\d{8})\b/)?.[1] ??
-    "";
-
-  return labeled.replace(/\s+/g, "").toUpperCase();
+function sanitizeLicenseNumber(value: string): string {
+  const cleaned = value.replace(/\s+/g, "").toUpperCase();
+  return isValidLicenseNumber(cleaned) ? cleaned : "";
 }
 
 function extractBirthDate(text: string): string {
@@ -58,15 +64,14 @@ function extractBirthDate(text: string): string {
 
 function extractLicenseType(text: string): string {
   const match = text.match(
-    /LICENCIA\s+(PARTICULAR|MOTOCICLETA|INTERNACIONAL|ESPECIAL|[A-ZÁÉÍÓÚÑ\s]{4,30})/i,
+    /LICENCIA\s+(PARTICULAR|MOTOCICLETA|INTERNACIONAL|ESPECIAL)/i,
   );
   return match?.[1]?.trim().toUpperCase() ?? "";
 }
 
 function extractRestrictions(text: string): string {
-  return (
-    text.match(/RESTRICCIONES[:\s]*([A-Z0-9,\s]{1,20})/i)?.[1]?.trim().toUpperCase() ?? ""
-  );
+  const match = text.match(/RESTRICCIONES[:\s]*([A-Z0-9]{1,6})/i)?.[1];
+  return match?.trim().toUpperCase() ?? "";
 }
 
 function extractBloodType(text: string): string {
@@ -84,11 +89,19 @@ function extractNames(text: string): { nombres: string; apellidos: string } {
     };
   }
 
-  const pipeParts = text.split(/[|;\n]/).map((part) => part.trim()).filter(Boolean);
+  const aamvaNames = text.match(/DCS([^D\n]{2,40})DAC([^D\n]{2,40})/);
+  if (aamvaNames) {
+    return {
+      apellidos: formatName(aamvaNames[1]),
+      nombres: formatName(aamvaNames[2]),
+    };
+  }
+
+  const pipeParts = text.split(/[|;\n\r]/).map((part) => part.trim()).filter(Boolean);
   for (const part of pipeParts) {
     if (/^[A-ZÁÉÍÓÚÑ\s]{8,}$/.test(part) && part.includes(" ")) {
       const words = part.split(/\s+/);
-      if (words.length >= 2) {
+      if (words.length >= 3) {
         return {
           apellidos: formatName(words.slice(0, 2).join(" ")),
           nombres: formatName(words.slice(2).join(" ")),
@@ -100,44 +113,31 @@ function extractNames(text: string): { nombres: string; apellidos: string } {
   return { nombres: "", apellidos: "" };
 }
 
-function parseJsonPayload(raw: string): Partial<LicenseScanResult> | null {
-  try {
-    const data = JSON.parse(raw) as Record<string, string>;
-    return {
-      numeroLicencia: data.licencia ?? data.numeroLicencia ?? data.license ?? "",
-      cui: data.cui ?? data.dpi ?? data.documento ?? "",
-      nombres: formatName(data.nombres ?? data.nombre ?? data.firstName ?? ""),
-      apellidos: formatName(data.apellidos ?? data.apellido ?? data.lastName ?? ""),
-      tipoLicencia: data.tipoLicencia ?? data.tipo ?? "",
-      fechaNacimiento: formatDate(data.fechaNacimiento ?? data.nacimiento ?? data.dob ?? ""),
-      restricciones: data.restricciones ?? "",
-      tipoSangre: data.tipoSangre ?? data.sangre ?? "",
-    };
-  } catch {
-    return null;
-  }
-}
-
 function parseUrlPayload(raw: string): Partial<LicenseScanResult> | null {
   try {
-    const url = new URL(raw);
-    const params = url.searchParams;
-    const entries = Object.fromEntries(params.entries());
-    return parseJsonPayload(JSON.stringify(entries));
+    const url = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    const patch: Partial<LicenseScanResult> = {};
+
+    url.searchParams.forEach((value, key) => {
+      const normalizedKey = key.toLowerCase();
+      if (normalizedKey.includes("cui") || normalizedKey.includes("dpi")) {
+        patch.cui = sanitizeCui(value);
+      }
+      if (normalizedKey.includes("nombre")) {
+        patch.nombres = formatName(value);
+      }
+      if (normalizedKey.includes("apellido")) {
+        patch.apellidos = formatName(value);
+      }
+      if (normalizedKey.includes("lic")) {
+        patch.numeroLicencia = sanitizeLicenseNumber(value);
+      }
+    });
+
+    return Object.keys(patch).length > 0 ? patch : null;
   } catch {
     return null;
   }
-}
-
-function hasUsefulData(result: LicenseScanResult): boolean {
-  return Boolean(
-    result.cui ||
-      result.numeroLicencia ||
-      result.nombres ||
-      result.apellidos ||
-      result.fechaNacimiento ||
-      result.tipoLicencia,
-  );
 }
 
 function emptyLicense(rawBarcode: string): LicenseScanResult {
@@ -155,21 +155,37 @@ function emptyLicense(rawBarcode: string): LicenseScanResult {
   };
 }
 
+function sanitizePatch(
+  patch: Partial<LicenseScanResult>,
+  birthDate = "",
+): Partial<LicenseScanResult> {
+  return {
+    ...patch,
+    cui: patch.cui ? sanitizeCui(patch.cui, birthDate) : "",
+    numeroLicencia: patch.numeroLicencia ? sanitizeLicenseNumber(patch.numeroLicencia) : "",
+    nombres: patch.nombres ? formatName(patch.nombres) : "",
+    apellidos: patch.apellidos ? formatName(patch.apellidos) : "",
+  };
+}
+
 export function mergeLicenseResults(
   base: LicenseScanResult,
   patch: Partial<LicenseScanResult>,
 ): LicenseScanResult {
+  const birthDate = patch.fechaNacimiento || base.fechaNacimiento;
+  const clean = sanitizePatch(patch, birthDate);
+
   return {
     ...base,
-    numeroLicencia: patch.numeroLicencia || base.numeroLicencia,
-    cui: patch.cui || base.cui,
-    nombres: patch.nombres || base.nombres,
-    apellidos: patch.apellidos || base.apellidos,
-    tipoLicencia: patch.tipoLicencia || base.tipoLicencia,
-    fechaNacimiento: patch.fechaNacimiento || base.fechaNacimiento,
-    restricciones: patch.restricciones || base.restricciones,
-    tipoSangre: patch.tipoSangre || base.tipoSangre,
-    rawBarcode: patch.rawBarcode || base.rawBarcode,
+    numeroLicencia: clean.numeroLicencia || base.numeroLicencia,
+    cui: clean.cui || base.cui,
+    nombres: clean.nombres || base.nombres,
+    apellidos: clean.apellidos || base.apellidos,
+    tipoLicencia: clean.tipoLicencia || base.tipoLicencia,
+    fechaNacimiento: clean.fechaNacimiento || base.fechaNacimiento,
+    restricciones: clean.restricciones || base.restricciones,
+    tipoSangre: clean.tipoSangre || base.tipoSangre,
+    rawBarcode: clean.rawBarcode || base.rawBarcode,
   };
 }
 
@@ -178,57 +194,77 @@ export function parseGuatemalaLicense(rawBarcode: string): LicenseScanResult | n
     return null;
   }
 
+  if (/^https?:\/\//i.test(rawBarcode) || rawBarcode.includes("transito")) {
+    const urlPatch = parseUrlPayload(rawBarcode);
+    return urlPatch ? mergeLicenseResults(emptyLicense(rawBarcode), urlPatch) : null;
+  }
+
   const aamva = parseAamvaBarcode(rawBarcode);
   if (aamva) {
-    return {
-      ...aamva,
-      fechaNacimiento: extractBirthDate(rawBarcode),
-      restricciones: extractRestrictions(rawBarcode),
-      tipoSangre: extractBloodType(rawBarcode),
-    };
+    const birthDate = extractBirthDate(rawBarcode);
+    return mergeLicenseResults(
+      { ...aamva, rawBarcode },
+      sanitizePatch(
+        {
+          fechaNacimiento: birthDate,
+          restricciones: extractRestrictions(rawBarcode),
+          tipoSangre: extractBloodType(rawBarcode),
+          cui: sanitizeCui(aamva.cui, birthDate),
+          numeroLicencia: sanitizeLicenseNumber(aamva.numeroLicencia),
+        },
+        birthDate,
+      ),
+    );
   }
 
-  let result = emptyLicense(rawBarcode);
-
-  const json = parseJsonPayload(rawBarcode);
-  if (json) {
-    result = mergeLicenseResults(result, json);
-  }
-
-  const url = parseUrlPayload(rawBarcode);
-  if (url) {
-    result = mergeLicenseResults(result, url);
-  }
-
+  const birthDate = extractBirthDate(rawBarcode);
   const names = extractNames(rawBarcode);
-  result = mergeLicenseResults(result, {
-    cui: extractCui(rawBarcode),
-    numeroLicencia: extractLicenseNumber(rawBarcode),
+
+  const result = mergeLicenseResults(emptyLicense(rawBarcode), {
+    cui: findValidCuiInText(rawBarcode, birthDate),
+    numeroLicencia: sanitizeLicenseNumber(
+      rawBarcode.match(/(?:DAQ|DCK|LIC)[:\s]*([A-Z0-9-]{4,20})/i)?.[1] ?? "",
+    ),
     nombres: names.nombres,
     apellidos: names.apellidos,
     tipoLicencia: extractLicenseType(rawBarcode),
-    fechaNacimiento: extractBirthDate(rawBarcode),
+    fechaNacimiento: birthDate,
     restricciones: extractRestrictions(rawBarcode),
     tipoSangre: extractBloodType(rawBarcode),
   });
 
-  return hasUsefulData(result) ? result : null;
+  const hasIdentity = Boolean(result.cui || result.nombres || result.apellidos);
+  const hasBarcodePayload = rawBarcode.length > 40 && /[A-Z]{3}[A-Z0-9]/.test(rawBarcode);
+
+  if (hasIdentity || hasBarcodePayload) {
+    return result;
+  }
+
+  return null;
 }
 
 export function parseGuatemalaLicenseOcr(text: string): LicenseScanResult | null {
   const normalized = text.toUpperCase().replace(/\s+/g, " ");
-  const names = extractNames(normalized);
+  const birthDate = extractBirthDate(normalized);
 
   const result = mergeLicenseResults(emptyLicense(normalized), {
-    numeroLicencia: extractLicenseNumber(normalized),
-    cui: extractCui(normalized),
-    nombres: names.nombres,
-    apellidos: names.apellidos,
+    numeroLicencia: findLicenseSerialInText(normalized),
+    cui: findValidCuiInText(normalized, birthDate),
+    nombres: "",
+    apellidos: "",
     tipoLicencia: extractLicenseType(normalized) || "PARTICULAR",
-    fechaNacimiento: extractBirthDate(normalized),
+    fechaNacimiento: birthDate,
     restricciones: extractRestrictions(normalized),
     tipoSangre: extractBloodType(normalized),
   });
 
-  return hasUsefulData(result) ? result : null;
+  const hasVisibleData = Boolean(
+    result.fechaNacimiento ||
+      result.tipoLicencia ||
+      result.restricciones ||
+      result.tipoSangre ||
+      result.numeroLicencia,
+  );
+
+  return hasVisibleData ? result : null;
 }

@@ -1,4 +1,5 @@
 import type { LicenseScanResult } from "@/lib/types/documents";
+import { findValidCuiInText, isValidGuatemalaCui } from "@/lib/parsers/cuiValidator";
 
 const AAMVA_FIELD_PATTERN =
   /(?:^|\n)([A-Z]{3})([^\n]*?)(?=\n[A-Z]{3}|\n@|\nANSI|$)/g;
@@ -43,14 +44,12 @@ function extractCui(fields: Record<string, string>, raw: string): string {
 
   for (const candidate of candidates) {
     const digits = candidate.replace(/\D/g, "");
-    if (digits.length === 13) {
+    if (digits.length === 13 && isValidGuatemalaCui(digits)) {
       return digits;
     }
   }
 
-  const allDigits = `${Object.values(fields).join(" ")} ${raw}`.replace(/\D/g, "");
-  const cuiMatch = allDigits.match(/\d{13}/);
-  return cuiMatch?.[0] ?? "";
+  return findValidCuiInText(raw);
 }
 
 function extractLicenseType(fields: Record<string, string>): string {

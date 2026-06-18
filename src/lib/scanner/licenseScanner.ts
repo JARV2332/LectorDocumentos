@@ -7,6 +7,7 @@ import {
   HybridBinarizer,
   MultiFormatReader,
   NotFoundException,
+  PDF417Reader,
 } from "@zxing/library";
 import {
   mergeLicenseResults,
@@ -16,20 +17,49 @@ import type { LicenseScanResult } from "@/lib/types/documents";
 import { scanLicenseVisibleText } from "@/lib/scanner/licenseOcr";
 import {
   cropLicensePdf417,
-  cropLicenseQr,
   cropRegion,
   downscaleCanvas,
   enhanceForBarcode,
   LICENSE_LOWER_HALF_REGION,
   LICENSE_PDF417_REGION,
-  LICENSE_QR_REGION,
   LICENSE_TOP_BARCODE_REGION,
-  upscaleCanvas,
   upscaleCanvasTo,
 } from "@/lib/utils/imageProcessing";
 import type { NormalizedRegion } from "@/lib/utils/objectCover";
 
-function decodeCanvasWithFormats(
+const PDF417_REGION_VARIANTS: NormalizedRegion[] = [
+  { x: 0.0, y: 0.5, width: 0.64, height: 0.44 },
+  { x: 0.0, y: 0.52, width: 0.68, height: 0.4 },
+  { x: 0.02, y: 0.48, width: 0.6, height: 0.46 },
+  { x: 0.0, y: 0.55, width: 0.7, height: 0.38 },
+  LICENSE_LOWER_HALF_REGION,
+];
+
+function decodePdf417(canvas: HTMLCanvasElement): string | null {
+  const reader = new PDF417Reader();
+  const binarizers = [
+    [HybridBinarizer, false],
+    [GlobalHistogramBinarizer, false],
+    [HybridBinarizer, true],
+    [GlobalHistogramBinarizer, true],
+  ] as const;
+
+  for (const [Binarizer, invert] of binarizers) {
+    try {
+      const source = new HTMLCanvasElementLuminanceSource(canvas, invert);
+      const bitmap = new BinaryBitmap(new Binarizer(source));
+      return reader.decode(bitmap).getText();
+    } catch (error) {
+      if (!(error instanceof NotFoundException)) {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
+function decodeWithReader(
   canvas: HTMLCanvasElement,
   formats: BarcodeFormat[],
 ): string | null {
@@ -37,14 +67,13 @@ function decodeCanvasWithFormats(
   hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
   hints.set(DecodeHintType.TRY_HARDER, true);
 
-  const attempts = [
+  const binarizers = [
     [HybridBinarizer, false],
     [GlobalHistogramBinarizer, false],
     [HybridBinarizer, true],
-    [GlobalHistogramBinarizer, true],
   ] as const;
 
-  for (const [Binarizer, invert] of attempts) {
+  for (const [Binarizer, invert] of binarizers) {
     const reader = new MultiFormatReader();
     reader.setHints(hints);
 
@@ -64,37 +93,26 @@ function decodeCanvasWithFormats(
   return null;
 }
 
-function processCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement[] {
+function buildProcessedVariants(canvas: HTMLCanvasElement): HTMLCanvasElement[] {
   return [
+    enhanceForBarcode(upscaleCanvasTo(canvas, 2200)),
+    enhanceForBarcode(upscaleCanvasTo(canvas, 1800)),
     enhanceForBarcode(upscaleCanvasTo(canvas, 1400)),
-    enhanceForBarcode(upscaleCanvas(canvas, 1100)),
+    upscaleCanvasTo(canvas, 1600),
     enhanceForBarcode(canvas),
-    upscaleCanvasTo(canvas, 1200),
     canvas,
-    downscaleCanvas(enhanceForBarcode(canvas), 960),
+    downscaleCanvas(enhanceForBarcode(canvas), 1200),
   ];
 }
 
-interface ScanTarget {
-  region: NormalizedRegion;
-  formats: BarcodeFormat[];
-}
+function scanPdf417OnCanvas(canvas: HTMLCanvasElement): LicenseScanResult | null {
+  let best: LicenseScanResult | null = null;
 
-const SCAN_TARGETS: ScanTarget[] = [
-  { region: LICENSE_PDF417_REGION, formats: [BarcodeFormat.PDF_417] },
-  { region: LICENSE_QR_REGION, formats: [BarcodeFormat.QR_CODE] },
-  { region: LICENSE_LOWER_HALF_REGION, formats: [BarcodeFormat.PDF_417, BarcodeFormat.QR_CODE] },
-  { region: LICENSE_TOP_BARCODE_REGION, formats: [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39] },
-];
+  for (const region of PDF417_REGION_VARIANTS) {
+    const cropped = cropRegion(canvas, region);
 
-function scanBarcodesOnCanvas(canvas: HTMLCanvasElement): LicenseScanResult | null {
-  let merged: LicenseScanResult | null = null;
-
-  for (const target of SCAN_TARGETS) {
-    const cropped = cropRegion(canvas, target.region);
-
-    for (const processed of processCanvas(cropped)) {
-      const raw = decodeCanvasWithFormats(processed, target.formats);
+    for (const processed of buildProcessedVariants(cropped)) {
+      const raw = decodePdf417(processed) ?? decodeWithReader(processed, [BarcodeFormat.PDF_417]);
       if (!raw) {
         continue;
       }
@@ -104,48 +122,74 @@ function scanBarcodesOnCanvas(canvas: HTMLCanvasElement): LicenseScanResult | nu
         continue;
       }
 
-      merged = merged ? mergeLicenseResults(merged, parsed) : parsed;
-    }
-  }
+      best = best ? mergeLicenseResults(best, parsed) : parsed;
 
-  const pdf417Only = cropLicensePdf417(canvas);
-  for (const processed of processCanvas(pdf417Only)) {
-    const raw = decodeCanvasWithFormats(processed, [BarcodeFormat.PDF_417]);
-    if (raw) {
-      const parsed = parseGuatemalaLicense(raw);
-      if (parsed) {
-        merged = merged ? mergeLicenseResults(merged, parsed) : parsed;
+      if (parsed.cui && parsed.nombres && parsed.apellidos) {
+        return parsed;
       }
     }
   }
 
-  const qrOnly = cropLicenseQr(canvas);
-  for (const processed of processCanvas(qrOnly)) {
-    const raw = decodeCanvasWithFormats(processed, [BarcodeFormat.QR_CODE]);
-    if (raw) {
-      const parsed = parseGuatemalaLicense(raw);
-      if (parsed) {
-        merged = merged ? mergeLicenseResults(merged, parsed) : parsed;
-      }
+  const direct = cropLicensePdf417(canvas);
+  for (const processed of buildProcessedVariants(direct)) {
+    const raw = decodePdf417(processed);
+    if (!raw) {
+      continue;
+    }
+
+    const parsed = parseGuatemalaLicense(raw);
+    if (parsed) {
+      best = best ? mergeLicenseResults(best, parsed) : parsed;
     }
   }
 
-  return merged;
+  return best;
+}
+
+function scanTopBarcode(canvas: HTMLCanvasElement): LicenseScanResult | null {
+  const cropped = cropRegion(canvas, LICENSE_TOP_BARCODE_REGION);
+
+  for (const processed of buildProcessedVariants(cropped)) {
+    const raw = decodeWithReader(processed, [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]);
+    if (!raw) {
+      continue;
+    }
+
+    const parsed = parseGuatemalaLicense(raw);
+    if (parsed?.numeroLicencia || parsed?.cui) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function hasIdentityData(result: LicenseScanResult): boolean {
+  return Boolean(result.cui || result.nombres || result.apellidos);
 }
 
 export async function scanLicenseFromCanvas(
   canvas: HTMLCanvasElement,
 ): Promise<LicenseScanResult | null> {
-  const barcodeResult = scanBarcodesOnCanvas(canvas);
+  const pdf417Result = scanPdf417OnCanvas(canvas);
+  const topBarcodeResult = scanTopBarcode(canvas);
 
-  if (barcodeResult?.cui && barcodeResult.nombres && barcodeResult.apellidos) {
-    return barcodeResult;
+  let barcodeResult: LicenseScanResult | null = pdf417Result;
+  if (topBarcodeResult) {
+    barcodeResult = barcodeResult
+      ? mergeLicenseResults(barcodeResult, topBarcodeResult)
+      : topBarcodeResult;
+  }
+
+  if (barcodeResult && hasIdentityData(barcodeResult)) {
+    const ocrExtras = await scanLicenseVisibleText(canvas);
+    return ocrExtras ? mergeLicenseResults(barcodeResult, ocrExtras) : barcodeResult;
   }
 
   const ocrResult = await scanLicenseVisibleText(canvas);
 
   if (barcodeResult && ocrResult) {
-    return mergeLicenseResults(barcodeResult, ocrResult);
+    return mergeLicenseResults(ocrResult, barcodeResult);
   }
 
   return barcodeResult ?? ocrResult;
@@ -154,31 +198,10 @@ export async function scanLicenseFromCanvas(
 export async function scanLicenseFromRegion(
   captureFrame: (region?: NormalizedRegion) => HTMLCanvasElement | null,
 ): Promise<LicenseScanResult | null> {
-  const regions: Array<NormalizedRegion | undefined> = [
-    undefined,
-    LICENSE_PDF417_REGION,
-    LICENSE_LOWER_HALF_REGION,
-  ];
-
-  let merged: LicenseScanResult | null = null;
-
-  for (const region of regions) {
-    const canvas = captureFrame(region);
-    if (!canvas) {
-      continue;
-    }
-
-    const result = await scanLicenseFromCanvas(canvas);
-    if (!result) {
-      continue;
-    }
-
-    merged = merged ? mergeLicenseResults(merged, result) : result;
-
-    if (merged.cui && (merged.nombres || merged.fechaNacimiento)) {
-      return merged;
-    }
+  const canvas = captureFrame(undefined) ?? captureFrame(LICENSE_PDF417_REGION);
+  if (!canvas) {
+    return null;
   }
 
-  return merged;
+  return scanLicenseFromCanvas(canvas);
 }

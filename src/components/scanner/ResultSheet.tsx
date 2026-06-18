@@ -87,8 +87,8 @@ function ResultForm({
         <>
           {licenseHasPartialData && (
             <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Se leyeron datos del reverso. Los nombres suelen venir en el PDF417 o el frente de la
-              licencia — puedes completarlos manualmente.
+              Si faltan nombres o CUI, el PDF417 no se leyó completo. Usa buena luz en el código
+              grande de la izquierda o completa los campos manualmente.
             </p>
           )}
 
