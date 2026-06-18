@@ -17,17 +17,23 @@ export function FocusOverlay({ mode, className }: FocusOverlayProps) {
 
       <div
         className={cn(
-          "absolute left-1/2 -translate-x-1/2 border-2 border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]",
+          "absolute left-1/2 -translate-x-1/2 border-2 border-emerald-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]",
           isLicense
-            ? "top-[38%] h-[22%] w-[88%] rounded-xl"
+            ? "bottom-[18%] h-[24%] w-[90%] rounded-xl"
             : "bottom-[14%] h-[28%] w-[92%] rounded-lg",
         )}
       >
-        <span className="absolute -top-8 left-0 right-0 text-center text-xs font-medium text-white/90">
+        <span className="absolute -top-10 left-0 right-0 text-center text-xs font-semibold text-emerald-300">
           {isLicense
-            ? "Alinea el código PDF417 de la licencia"
-            : "Enfoca las 3 líneas MRZ del reverso del DPI"}
+            ? "Código GRANDE de abajo (PDF417)"
+            : "3 líneas MRZ del reverso (IDGTM)"}
         </span>
+
+        {isLicense && (
+          <span className="absolute -top-[4.5rem] left-0 right-0 text-center text-[10px] text-white/70">
+            Ignora el código pequeño de arriba
+          </span>
+        )}
 
         <span className="absolute left-2 top-2 h-5 w-5 border-l-2 border-t-2 border-emerald-400" />
         <span className="absolute right-2 top-2 h-5 w-5 border-r-2 border-t-2 border-emerald-400" />

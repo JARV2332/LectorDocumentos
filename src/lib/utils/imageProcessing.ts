@@ -1,3 +1,5 @@
+import type { NormalizedRegion } from "@/lib/utils/objectCover";
+
 export function enhanceForOcr(source: HTMLCanvasElement): HTMLCanvasElement {
   const output = document.createElement("canvas");
   output.width = source.width;
@@ -25,9 +27,24 @@ export function enhanceForOcr(source: HTMLCanvasElement): HTMLCanvasElement {
   return output;
 }
 
+export function enhanceForBarcode(source: HTMLCanvasElement): HTMLCanvasElement {
+  const output = document.createElement("canvas");
+  output.width = source.width;
+  output.height = source.height;
+
+  const context = output.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return source;
+  }
+
+  context.filter = "grayscale(1) contrast(2.2) brightness(1.05)";
+  context.drawImage(source, 0, 0);
+  return output;
+}
+
 export function cropRegion(
   source: HTMLCanvasElement,
-  region: { x: number; y: number; width: number; height: number },
+  region: NormalizedRegion,
 ): HTMLCanvasElement {
   const x = Math.max(0, Math.floor(source.width * region.x));
   const y = Math.max(0, Math.floor(source.height * region.y));
@@ -35,8 +52,8 @@ export function cropRegion(
   const height = Math.min(source.height - y, Math.floor(source.height * region.height));
 
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = Math.max(1, width);
+  canvas.height = Math.max(1, height);
 
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) {
@@ -47,12 +64,31 @@ export function cropRegion(
   return canvas;
 }
 
+/** Reverso DPI: 3 líneas MRZ en la parte inferior. */
 export function cropMrzRegion(source: HTMLCanvasElement): HTMLCanvasElement {
   return cropRegion(source, { x: 0.04, y: 0.58, width: 0.92, height: 0.34 });
 }
 
-export function cropBarcodeRegion(source: HTMLCanvasElement): HTMLCanvasElement {
-  return cropRegion(source, { x: 0.06, y: 0.3, width: 0.88, height: 0.34 });
+/**
+ * Licencia GT: PDF417 grande en la parte INFERIOR del reverso.
+ * El código pequeño de arriba (Code128) se ignora a propósito.
+ */
+export const LICENSE_BOTTOM_BARCODE_REGION: NormalizedRegion = {
+  x: 0.04,
+  y: 0.62,
+  width: 0.92,
+  height: 0.28,
+};
+
+export const LICENSE_LOWER_HALF_REGION: NormalizedRegion = {
+  x: 0.03,
+  y: 0.48,
+  width: 0.94,
+  height: 0.48,
+};
+
+export function cropLicenseBottomBarcode(source: HTMLCanvasElement): HTMLCanvasElement {
+  return cropRegion(source, LICENSE_BOTTOM_BARCODE_REGION);
 }
 
 export function downscaleCanvas(
@@ -66,13 +102,36 @@ export function downscaleCanvas(
   const scale = maxWidth / source.width;
   const canvas = document.createElement("canvas");
   canvas.width = maxWidth;
-  canvas.height = Math.floor(source.height * scale);
+  canvas.height = Math.max(1, Math.floor(source.height * scale));
 
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) {
     return source;
   }
 
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+export function upscaleCanvas(
+  source: HTMLCanvasElement,
+  minWidth = 900,
+): HTMLCanvasElement {
+  if (source.width >= minWidth) {
+    return source;
+  }
+
+  const scale = minWidth / source.width;
+  const canvas = document.createElement("canvas");
+  canvas.width = minWidth;
+  canvas.height = Math.max(1, Math.floor(source.height * scale));
+
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return source;
+  }
+
+  context.imageSmoothingEnabled = false;
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
   return canvas;
 }

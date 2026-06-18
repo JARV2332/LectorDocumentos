@@ -1,20 +1,19 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { NotFoundException } from "@zxing/library";
-import { scanLicenseFromCanvas } from "@/lib/scanner/licenseScanner";
+import { scanLicenseFromRegion } from "@/lib/scanner/licenseScanner";
 import type { LicenseScanResult } from "@/lib/types/documents";
 import { waitForVideoReady } from "@/lib/utils/videoReady";
 
 interface UseBarcodeScannerOptions {
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  captureFrame: () => HTMLCanvasElement | null;
+  captureFrame: (region?: import("@/lib/utils/objectCover").NormalizedRegion) => HTMLCanvasElement | null;
   enabled: boolean;
   onDetected: (result: LicenseScanResult) => void;
   onStatus?: (message: string) => void;
 }
 
-const SCAN_INTERVAL_MS = 450;
+const SCAN_INTERVAL_MS = 350;
 
 export function useBarcodeScanner({
   videoRef,
@@ -50,36 +49,28 @@ export function useBarcodeScanner({
         return;
       }
 
-      const ready = await waitForVideoReady(video);
-      if (!ready || cancelled) {
-        onStatusRef.current?.("Cámara lista. Acerca el código PDF417.");
+      await waitForVideoReady(video);
+      if (cancelled) {
         return;
       }
 
-      onStatusRef.current?.("Escaneando código PDF417...");
+      onStatusRef.current?.("Enfoca el código GRANDE de abajo (PDF417)...");
 
       intervalId = setInterval(async () => {
         if (cancelled || detectedRef.current || processingRef.current) {
           return;
         }
 
-        const canvas = captureFrame();
-        if (!canvas) {
-          return;
-        }
-
         processingRef.current = true;
 
         try {
-          const parsed = await scanLicenseFromCanvas(canvas);
+          const parsed = await scanLicenseFromRegion(captureFrame);
           if (parsed) {
             detectedRef.current = true;
             onDetectedRef.current(parsed);
           }
-        } catch (error) {
-          if (!(error instanceof NotFoundException)) {
-            onStatusRef.current?.("Escaneando... mantén el código dentro del recuadro.");
-          }
+        } catch {
+          onStatusRef.current?.("Acerca el código grande de abajo dentro del recuadro.");
         } finally {
           processingRef.current = false;
         }
@@ -98,12 +89,7 @@ export function useBarcodeScanner({
 }
 
 export async function scanLicenseNow(
-  captureFrame: () => HTMLCanvasElement | null,
+  captureFrame: (region?: import("@/lib/utils/objectCover").NormalizedRegion) => HTMLCanvasElement | null,
 ): Promise<LicenseScanResult | null> {
-  const canvas = captureFrame();
-  if (!canvas) {
-    return null;
-  }
-
-  return scanLicenseFromCanvas(canvas);
+  return scanLicenseFromRegion(captureFrame);
 }

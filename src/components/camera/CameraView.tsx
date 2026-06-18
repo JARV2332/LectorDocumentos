@@ -6,6 +6,7 @@ import { SuccessOverlay } from "@/components/ui/SuccessOverlay";
 import type { CameraStatus, ScanMode } from "@/lib/types/documents";
 
 interface CameraViewProps {
+  containerRef?: React.RefObject<HTMLDivElement | null>;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   mode: ScanMode;
   status: CameraStatus;
@@ -14,6 +15,7 @@ interface CameraViewProps {
 }
 
 export function CameraView({
+  containerRef,
   videoRef,
   mode,
   status,
@@ -24,7 +26,7 @@ export function CameraView({
   const isLoading = status === "requesting" || status === "idle";
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-black">
+    <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-black">
       <video
         ref={videoRef}
         className={cn(

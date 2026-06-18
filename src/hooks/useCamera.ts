@@ -2,14 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CameraStatus } from "@/lib/types/documents";
-import {
-  captureVideoFrame,
-  getCameraStream,
-  waitForVideoReady,
-} from "@/lib/utils/videoReady";
+import type { NormalizedRegion } from "@/lib/utils/objectCover";
+import { captureFullVisibleFrame, captureVisibleRegion } from "@/lib/utils/objectCover";
+import { getCameraStream, waitForVideoReady } from "@/lib/utils/videoReady";
 
 interface UseCameraOptions {
   enabled?: boolean;
+  containerRef?: React.RefObject<HTMLElement | null>;
 }
 
 interface UseCameraReturn {
@@ -18,11 +17,11 @@ interface UseCameraReturn {
   error: string | null;
   start: () => Promise<void>;
   stop: () => void;
-  captureFrame: () => HTMLCanvasElement | null;
+  captureFrame: (region?: NormalizedRegion) => HTMLCanvasElement | null;
 }
 
 export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
-  const { enabled = true } = options;
+  const { enabled = true, containerRef } = options;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [internalStatus, setInternalStatus] = useState<CameraStatus>("idle");
@@ -77,21 +76,40 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
       const message =
         err instanceof DOMException && err.name === "NotAllowedError"
           ? "Permiso de cámara denegado. Tócalo en la barra del navegador y elige Permitir."
-          : "No se pudo abrir la cámara. Prueba subir una foto del documento.";
+          : "No se pudo abrir la cámara. Prueba subir una foto del reverso.";
 
       setError(message);
       setInternalStatus("error");
     }
   }, [enabled, stopStream]);
 
-  const captureFrame = useCallback((): HTMLCanvasElement | null => {
-    const video = videoRef.current;
-    if (!video) {
-      return null;
-    }
+  const captureFrame = useCallback(
+    (region?: NormalizedRegion): HTMLCanvasElement | null => {
+      const video = videoRef.current;
+      const container = containerRef?.current;
 
-    return captureVideoFrame(video);
-  }, []);
+      if (!video || video.videoWidth === 0) {
+        return null;
+      }
+
+      if (container) {
+        return region
+          ? captureVisibleRegion(video, container, region)
+          : captureFullVisibleFrame(video, container);
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) {
+        return null;
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    },
+    [containerRef],
+  );
 
   useEffect(() => {
     if (!enabled) {

@@ -15,7 +15,7 @@ import { imageToCanvas, loadImageFromFile } from "@/lib/utils/videoReady";
 const SUCCESS_DELAY_MS = 900;
 
 export function ScannerScreen() {
-  const [mode, setMode] = useState<ScanMode>("dpi");
+  const [mode, setMode] = useState<ScanMode>("license");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
@@ -23,9 +23,11 @@ export function ScannerScreen() {
   const [statusMessage, setStatusMessage] = useState("Abriendo cámara...");
   const [isManualScanning, setIsManualScanning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   const { videoRef, status, error, start, stop, captureFrame } = useCamera({
     enabled: cameraEnabled,
+    containerRef,
   });
 
   const cameraStatus: CameraStatus = showSuccess ? "success" : status;
@@ -90,7 +92,7 @@ export function ScannerScreen() {
     }
 
     setIsManualScanning(true);
-    setStatusMessage("Capturando frame...");
+    setStatusMessage("Leyendo código de abajo...");
 
     try {
       const result =
@@ -104,7 +106,7 @@ export function ScannerScreen() {
       setStatusMessage(
         mode === "dpi"
           ? "No se leyó el MRZ. Enfoca el reverso del DPI o sube una foto."
-          : "No se leyó el PDF417. Acerca más el código o sube una foto.",
+          : "No se leyó el PDF417 de abajo. Acércalo más o sube una foto.",
       );
     } finally {
       setIsManualScanning(false);
@@ -120,7 +122,7 @@ export function ScannerScreen() {
     }
 
     setIsManualScanning(true);
-    setStatusMessage("Procesando foto...");
+    setStatusMessage("Procesando foto del reverso...");
 
     try {
       const image = await loadImageFromFile(file);
@@ -135,7 +137,7 @@ export function ScannerScreen() {
         return;
       }
 
-      setStatusMessage("No se detectó información en la foto. Intenta con mejor luz y enfoque.");
+      setStatusMessage("No se detectó el código. Foto del reverso, buena luz, código de abajo visible.");
     } catch {
       setStatusMessage("Error al procesar la imagen.");
     } finally {
@@ -150,12 +152,13 @@ export function ScannerScreen() {
         <p className="text-xs text-white/75">
           {mode === "dpi"
             ? "Reverso del DPI — 3 líneas con IDGTM"
-            : "Reverso de la licencia — código PDF417"}
+            : "Reverso licencia — código GRANDE de abajo"}
         </p>
       </header>
 
       <main className="relative min-h-0 flex-1 pb-[calc(7.5rem+env(safe-area-inset-bottom))]">
         <CameraView
+          containerRef={containerRef}
           videoRef={videoRef}
           mode={mode}
           status={cameraStatus}
