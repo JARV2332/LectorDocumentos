@@ -1,7 +1,19 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  reactStrictMode: true,
+  poweredByHeader: false,
+  headers: async () => [
+    {
+      source: "/(.*)",
+      headers: [
+        {
+          key: "Permissions-Policy",
+          value: "camera=(self)",
+        },
+      ],
+    },
+  ],
 };
 
 export default nextConfig;
