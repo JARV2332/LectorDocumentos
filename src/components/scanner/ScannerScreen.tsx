@@ -152,7 +152,7 @@ export function ScannerScreen() {
         <p className="text-xs text-white/75">
           {mode === "dpi"
             ? "Reverso del DPI — 3 líneas con IDGTM"
-            : "Reverso licencia — código GRANDE de abajo"}
+            : "Reverso licencia — PDF417 izquierda + QR derecha"}
         </p>
       </header>
 

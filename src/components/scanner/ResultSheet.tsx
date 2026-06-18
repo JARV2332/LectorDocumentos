@@ -28,6 +28,9 @@ function resultToFormData(result: ScanResult): Record<string, string> {
     nombres: result.nombres,
     apellidos: result.apellidos,
     tipoLicencia: result.tipoLicencia,
+    fechaNacimiento: result.fechaNacimiento,
+    restricciones: result.restricciones,
+    tipoSangre: result.tipoSangre,
   };
 }
 
@@ -45,6 +48,12 @@ function ResultForm({
   const updateField = (key: string, value: string) => {
     setFormData((current) => ({ ...current, [key]: value }));
   };
+
+  const licenseHasPartialData =
+    result.type === "license" &&
+    !result.nombres &&
+    !result.apellidos &&
+    (result.fechaNacimiento || result.numeroLicencia || result.tipoLicencia);
 
   return (
     <div className="space-y-4">
@@ -76,8 +85,15 @@ function ResultForm({
         </>
       ) : (
         <>
+          {licenseHasPartialData && (
+            <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Se leyeron datos del reverso. Los nombres suelen venir en el PDF417 o el frente de la
+              licencia — puedes completarlos manualmente.
+            </p>
+          )}
+
           <FormField
-            label="Número de licencia"
+            label="Número de licencia / serial"
             value={formData.numeroLicencia ?? ""}
             onChange={(value) => updateField("numeroLicencia", value)}
           />
@@ -102,6 +118,22 @@ function ResultForm({
             label="Tipo de licencia"
             value={formData.tipoLicencia ?? ""}
             onChange={(value) => updateField("tipoLicencia", value)}
+          />
+          <FormField
+            label="Fecha de nacimiento"
+            value={formData.fechaNacimiento ?? ""}
+            onChange={(value) => updateField("fechaNacimiento", value)}
+            placeholder="YYYY-MM-DD"
+          />
+          <FormField
+            label="Restricciones"
+            value={formData.restricciones ?? ""}
+            onChange={(value) => updateField("restricciones", value)}
+          />
+          <FormField
+            label="Tipo de sangre"
+            value={formData.tipoSangre ?? ""}
+            onChange={(value) => updateField("tipoSangre", value)}
           />
         </>
       )}
@@ -138,7 +170,7 @@ export function ResultSheet({ result, open, onClose, onScanAgain }: ResultSheetP
   const formKey =
     result.type === "dpi"
       ? `${result.cui}-${result.fechaNacimiento}`
-      : `${result.numeroLicencia}-${result.cui}`;
+      : `${result.numeroLicencia}-${result.cui}-${result.fechaNacimiento}`;
 
   return (
     <BottomSheet open={open} onClose={onClose} title={title}>

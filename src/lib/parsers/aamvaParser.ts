@@ -109,6 +109,9 @@ export function parseAamvaBarcode(rawBarcode: string): LicenseScanResult | null 
         nombres: "",
         apellidos: "",
         tipoLicencia: "",
+        fechaNacimiento: "",
+        restricciones: "",
+        tipoSangre: "",
         rawBarcode,
       };
     }
@@ -122,6 +125,22 @@ export function parseAamvaBarcode(rawBarcode: string): LicenseScanResult | null 
     nombres,
     apellidos,
     tipoLicencia,
+    fechaNacimiento: extractBirthDateFromRaw(rawBarcode),
+    restricciones: "",
+    tipoSangre: "",
     rawBarcode,
   };
+}
+
+function extractBirthDateFromRaw(raw: string): string {
+  const match = raw.match(/\b(\d{2}[\/\-.]\d{2}[\/\-.]\d{4})\b/);
+  if (!match) {
+    return "";
+  }
+  const [, value] = match;
+  const parts = value.split(/[\/\-.]/);
+  if (parts.length !== 3) {
+    return "";
+  }
+  return `${parts[2]}-${parts[1]}-${parts[0]}`;
 }

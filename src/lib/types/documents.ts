@@ -16,6 +16,9 @@ export interface LicenseScanResult {
   nombres: string;
   apellidos: string;
   tipoLicencia: string;
+  fechaNacimiento: string;
+  restricciones: string;
+  tipoSangre: string;
   rawBarcode: string;
 }
 

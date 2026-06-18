@@ -37,7 +37,7 @@ export function enhanceForBarcode(source: HTMLCanvasElement): HTMLCanvasElement 
     return source;
   }
 
-  context.filter = "grayscale(1) contrast(2.2) brightness(1.05)";
+  context.filter = "grayscale(1) contrast(2.4) brightness(1.08)";
   context.drawImage(source, 0, 0);
   return output;
 }
@@ -64,31 +64,49 @@ export function cropRegion(
   return canvas;
 }
 
-/** Reverso DPI: 3 líneas MRZ en la parte inferior. */
 export function cropMrzRegion(source: HTMLCanvasElement): HTMLCanvasElement {
   return cropRegion(source, { x: 0.04, y: 0.58, width: 0.92, height: 0.34 });
 }
 
-/**
- * Licencia GT: PDF417 grande en la parte INFERIOR del reverso.
- * El código pequeño de arriba (Code128) se ignora a propósito.
- */
-export const LICENSE_BOTTOM_BARCODE_REGION: NormalizedRegion = {
-  x: 0.04,
-  y: 0.62,
-  width: 0.92,
-  height: 0.28,
+/** PDF417 grande abajo-izquierda (como licencia GT real). */
+export const LICENSE_PDF417_REGION: NormalizedRegion = {
+  x: 0.0,
+  y: 0.5,
+  width: 0.64,
+  height: 0.44,
 };
+
+/** QR abajo-derecha. */
+export const LICENSE_QR_REGION: NormalizedRegion = {
+  x: 0.6,
+  y: 0.5,
+  width: 0.38,
+  height: 0.44,
+};
+
+/** Código lineal pequeño arriba (respaldo). */
+export const LICENSE_TOP_BARCODE_REGION: NormalizedRegion = {
+  x: 0.18,
+  y: 0.06,
+  width: 0.64,
+  height: 0.18,
+};
+
+export const LICENSE_BOTTOM_BARCODE_REGION = LICENSE_PDF417_REGION;
 
 export const LICENSE_LOWER_HALF_REGION: NormalizedRegion = {
-  x: 0.03,
-  y: 0.48,
-  width: 0.94,
-  height: 0.48,
+  x: 0.02,
+  y: 0.45,
+  width: 0.96,
+  height: 0.5,
 };
 
-export function cropLicenseBottomBarcode(source: HTMLCanvasElement): HTMLCanvasElement {
-  return cropRegion(source, LICENSE_BOTTOM_BARCODE_REGION);
+export function cropLicensePdf417(source: HTMLCanvasElement): HTMLCanvasElement {
+  return cropRegion(source, LICENSE_PDF417_REGION);
+}
+
+export function cropLicenseQr(source: HTMLCanvasElement): HTMLCanvasElement {
+  return cropRegion(source, LICENSE_QR_REGION);
 }
 
 export function downscaleCanvas(
@@ -134,4 +152,11 @@ export function upscaleCanvas(
   context.imageSmoothingEnabled = false;
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
   return canvas;
+}
+
+export function upscaleCanvasTo(
+  source: HTMLCanvasElement,
+  minWidth: number,
+): HTMLCanvasElement {
+  return upscaleCanvas(source, minWidth);
 }

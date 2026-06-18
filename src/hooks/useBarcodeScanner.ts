@@ -54,7 +54,7 @@ export function useBarcodeScanner({
         return;
       }
 
-      onStatusRef.current?.("Enfoca el código GRANDE de abajo (PDF417)...");
+      onStatusRef.current?.("Enfoca el PDF417 grande de la izquierda...");
 
       intervalId = setInterval(async () => {
         if (cancelled || detectedRef.current || processingRef.current) {
