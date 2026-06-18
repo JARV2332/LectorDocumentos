@@ -11,7 +11,7 @@ async function getLicenseOcrWorker(): Promise<OcrWorker> {
   if (!workerPromise) {
     workerPromise = (async () => {
       const { createWorker, PSM } = await import("tesseract.js");
-      const worker = await createWorker("spa+eng", 1, {
+      const worker = await createWorker("eng", 1, {
         logger: () => undefined,
       });
 
@@ -37,11 +37,7 @@ export async function scanLicenseVisibleText(
   canvas: HTMLCanvasElement,
 ): Promise<LicenseScanResult | null> {
   const worker = await getLicenseOcrWorker();
-  const attempts = [
-    enhanceForOcr(cropRegion(canvas, LICENSE_TEXT_REGION)),
-    enhanceForOcr(canvas),
-    cropRegion(canvas, LICENSE_TEXT_REGION),
-  ];
+  const attempts = [enhanceForOcr(cropRegion(canvas, LICENSE_TEXT_REGION))];
 
   for (const attempt of attempts) {
     const { data } = await worker.recognize(attempt);

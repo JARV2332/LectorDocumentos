@@ -12,7 +12,11 @@ declare global {
     formats?: string[];
   }
 
-  // eslint-disable-next-line no-var
+  interface DetectedBarcode {
+    rawValue?: string;
+    format?: string;
+  }
+
   var BarcodeDetector: {
     prototype: BarcodeDetector;
     new (options?: BarcodeDetectorOptions): BarcodeDetector;

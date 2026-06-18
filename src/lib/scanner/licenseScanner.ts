@@ -30,6 +30,7 @@ import {
   upscaleCanvasTo,
 } from "@/lib/utils/imageProcessing";
 import type { NormalizedRegion } from "@/lib/utils/objectCover";
+import { yieldToMain } from "@/lib/utils/yieldToMain";
 
 export interface ScanLicenseOptions {
   onProgress?: (message: string) => void;
@@ -125,17 +126,25 @@ function decodeWithReader(
   return null;
 }
 
-function buildProcessedVariants(canvas: HTMLCanvasElement): HTMLCanvasElement[] {
+function buildFastVariants(canvas: HTMLCanvasElement): HTMLCanvasElement[] {
   return [
-    enhanceForBarcode(upscaleCanvasTo(canvas, 2600)),
-    enhanceForBarcode(upscaleCanvasTo(canvas, 2200)),
-    enhanceForBarcode(upscaleCanvasTo(canvas, 1800)),
     enhanceForBarcode(upscaleCanvasTo(canvas, 1400)),
-    upscaleCanvasTo(canvas, 1600),
     enhanceForBarcode(canvas),
     canvas,
-    downscaleCanvas(enhanceForBarcode(canvas), 1200),
   ];
+}
+
+function buildExhaustiveVariants(canvas: HTMLCanvasElement): HTMLCanvasElement[] {
+  return [
+    enhanceForBarcode(upscaleCanvasTo(canvas, 2000)),
+    enhanceForBarcode(upscaleCanvasTo(canvas, 1600)),
+    ...buildFastVariants(canvas),
+    downscaleCanvas(enhanceForBarcode(canvas), 1100),
+  ];
+}
+
+function buildProcessedVariants(canvas: HTMLCanvasElement, exhaustive: boolean): HTMLCanvasElement[] {
+  return exhaustive ? buildExhaustiveVariants(canvas) : buildFastVariants(canvas);
 }
 
 async function decodeWithNativeBarcodeDetector(
@@ -165,8 +174,9 @@ async function decodeWithNativeBarcodeDetector(
 function tryDecodePdf417(
   canvas: HTMLCanvasElement,
   debug: LicenseScanDebug,
+  exhaustive: boolean,
 ): string | null {
-  for (const processed of buildProcessedVariants(canvas)) {
+  for (const processed of buildProcessedVariants(canvas, exhaustive)) {
     debug.decodeAttempts += 1;
     const raw =
       decodePdf417(processed) ?? decodeWithReader(processed, [BarcodeFormat.PDF_417]);
@@ -191,14 +201,15 @@ async function scanPdf417OnCanvas(
   let best: LicenseScanResult | null = null;
   const regions = exhaustive
     ? [...PDF417_REGION_VARIANTS, ...generateGridRegions(4, 4, 1)]
-    : PDF417_REGION_VARIANTS;
+    : [LICENSE_PDF417_REGION, LICENSE_LOWER_HALF_REGION];
 
   for (const region of regions) {
     debug.regionsScanned += 1;
     onProgress?.(`PDF417 región ${debug.regionsScanned}/${regions.length}...`);
+    await yieldToMain();
 
     const cropped = cropRegion(canvas, region);
-    const raw = tryDecodePdf417(cropped, debug);
+    const raw = tryDecodePdf417(cropped, debug, exhaustive);
 
     if (!raw) {
       continue;
@@ -233,10 +244,14 @@ async function scanPdf417OnCanvas(
   return best;
 }
 
-function scanTopBarcode(canvas: HTMLCanvasElement, debug: LicenseScanDebug): LicenseScanResult | null {
+function scanTopBarcode(
+  canvas: HTMLCanvasElement,
+  debug: LicenseScanDebug,
+  exhaustive: boolean,
+): LicenseScanResult | null {
   const cropped = cropRegion(canvas, LICENSE_TOP_BARCODE_REGION);
 
-  for (const processed of buildProcessedVariants(cropped)) {
+  for (const processed of buildProcessedVariants(cropped, exhaustive)) {
     debug.decodeAttempts += 1;
     const raw = decodeWithReader(processed, [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]);
     if (!raw) {
@@ -253,10 +268,14 @@ function scanTopBarcode(canvas: HTMLCanvasElement, debug: LicenseScanDebug): Lic
   return null;
 }
 
-function scanQr(canvas: HTMLCanvasElement, debug: LicenseScanDebug): LicenseScanResult | null {
+function scanQr(
+  canvas: HTMLCanvasElement,
+  debug: LicenseScanDebug,
+  exhaustive: boolean,
+): LicenseScanResult | null {
   const cropped = cropRegion(canvas, LICENSE_QR_REGION);
 
-  for (const processed of buildProcessedVariants(cropped)) {
+  for (const processed of buildProcessedVariants(cropped, exhaustive)) {
     debug.decodeAttempts += 1;
     const raw = decodeWithReader(processed, [BarcodeFormat.QR_CODE]);
     if (!raw) {
@@ -278,13 +297,13 @@ export async function scanLicenseFromCanvasDetailed(
   options: ScanLicenseOptions = {},
 ): Promise<ScanLicenseOutcome> {
   const debug: LicenseScanDebug = { ...EMPTY_SCAN_DEBUG };
-  const { onProgress, exhaustive = true } = options;
+  const { onProgress, exhaustive = false } = options;
 
-  onProgress?.("Buscando PDF417 en la imagen...");
+  onProgress?.("Buscando PDF417...");
 
   const pdf417Result = await scanPdf417OnCanvas(canvas, debug, exhaustive, onProgress);
-  const topBarcodeResult = scanTopBarcode(canvas, debug);
-  const qrResult = scanQr(canvas, debug);
+  const topBarcodeResult = scanTopBarcode(canvas, debug, exhaustive);
+  const qrResult = scanQr(canvas, debug, exhaustive);
 
   let barcodeResult: LicenseScanResult | null = pdf417Result;
 
@@ -335,10 +354,10 @@ export async function scanLicenseFromRegion(
   captureFrame: (region?: NormalizedRegion) => HTMLCanvasElement | null,
   options?: ScanLicenseOptions,
 ): Promise<LicenseScanResult | null> {
-  const canvas = captureFrame(undefined) ?? captureFrame(LICENSE_PDF417_REGION);
+  const canvas = captureFrame(LICENSE_PDF417_REGION);
   if (!canvas) {
     return null;
   }
 
-  return scanLicenseFromCanvas(canvas, options);
+  return scanLicenseFromCanvas(canvas, { ...options, exhaustive: false });
 }

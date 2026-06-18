@@ -1,19 +1,20 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { scanLicenseFromRegion } from "@/lib/scanner/licenseScanner";
+import { scanLicenseLiveFrame } from "@/lib/scanner/licenseScannerLive";
 import type { LicenseScanResult } from "@/lib/types/documents";
+import type { NormalizedRegion } from "@/lib/utils/objectCover";
 import { waitForVideoReady } from "@/lib/utils/videoReady";
 
 interface UseBarcodeScannerOptions {
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  captureFrame: (region?: import("@/lib/utils/objectCover").NormalizedRegion) => HTMLCanvasElement | null;
+  captureFrame: (region?: NormalizedRegion) => HTMLCanvasElement | null;
   enabled: boolean;
   onDetected: (result: LicenseScanResult) => void;
   onStatus?: (message: string) => void;
 }
 
-const SCAN_INTERVAL_MS = 350;
+const SCAN_INTERVAL_MS = 1100;
 
 export function useBarcodeScanner({
   videoRef,
@@ -23,7 +24,6 @@ export function useBarcodeScanner({
   onStatus,
 }: UseBarcodeScannerOptions): void {
   const detectedRef = useRef(false);
-  const processingRef = useRef(false);
   const onDetectedRef = useRef(onDetected);
   const onStatusRef = useRef(onStatus);
 
@@ -54,25 +54,17 @@ export function useBarcodeScanner({
         return;
       }
 
-      onStatusRef.current?.("Enfoca el PDF417 grande de la izquierda...");
+      onStatusRef.current?.("Enfoca el PDF417 de la izquierda...");
 
-      intervalId = setInterval(async () => {
-        if (cancelled || detectedRef.current || processingRef.current) {
+      intervalId = setInterval(() => {
+        if (cancelled || detectedRef.current) {
           return;
         }
 
-        processingRef.current = true;
-
-        try {
-          const parsed = await scanLicenseFromRegion(captureFrame);
-          if (parsed) {
-            detectedRef.current = true;
-            onDetectedRef.current(parsed);
-          }
-        } catch {
-          onStatusRef.current?.("Acerca el código grande de abajo dentro del recuadro.");
-        } finally {
-          processingRef.current = false;
+        const parsed = scanLicenseLiveFrame(captureFrame);
+        if (parsed) {
+          detectedRef.current = true;
+          onDetectedRef.current(parsed);
         }
       }, SCAN_INTERVAL_MS);
     };
@@ -86,10 +78,4 @@ export function useBarcodeScanner({
       }
     };
   }, [captureFrame, enabled, videoRef]);
-}
-
-export async function scanLicenseNow(
-  captureFrame: (region?: import("@/lib/utils/objectCover").NormalizedRegion) => HTMLCanvasElement | null,
-): Promise<LicenseScanResult | null> {
-  return scanLicenseFromRegion(captureFrame);
 }

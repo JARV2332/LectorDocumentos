@@ -8,13 +8,41 @@ import { ScanDebugPanel } from "@/components/scanner/ScanDebugPanel";
 import { useCamera } from "@/hooks/useCamera";
 import { useBarcodeScanner } from "@/hooks/useBarcodeScanner";
 import { scanDpiNow, useMrzOcr } from "@/hooks/useMrzOcr";
-import { scanDpiFromCanvas } from "@/lib/scanner/dpiScanner";
-import { scanLicenseFromCanvasDetailed } from "@/lib/scanner/licenseScanner";
 import type { CameraStatus, ScanMode, ScanResult } from "@/lib/types/documents";
 import type { LicenseScanDebug } from "@/lib/types/scanDebug";
+import { yieldToMain } from "@/lib/utils/yieldToMain";
 import { imageToCanvas, loadImageFromFile } from "@/lib/utils/videoReady";
 
 const SUCCESS_DELAY_MS = 900;
+
+async function scanLicensePhoto(canvas: HTMLCanvasElement, onProgress: (msg: string) => void) {
+  const { scanLicenseFromCanvasDetailed } = await import("@/lib/scanner/licenseScanner");
+
+  onProgress("Escaneo rápido...");
+  let outcome = await scanLicenseFromCanvasDetailed(canvas, {
+    exhaustive: false,
+    onProgress,
+  });
+
+  if (outcome.result?.cui && (outcome.result.nombres || outcome.result.apellidos)) {
+    return outcome;
+  }
+
+  onProgress("Escaneo profundo (puede tardar unos segundos)...");
+  await yieldToMain();
+
+  outcome = await scanLicenseFromCanvasDetailed(canvas, {
+    exhaustive: true,
+    onProgress,
+  });
+
+  return outcome;
+}
+
+async function scanDpiPhoto(canvas: HTMLCanvasElement) {
+  const { scanDpiFromCanvas } = await import("@/lib/scanner/dpiScanner");
+  return scanDpiFromCanvas(canvas);
+}
 
 export function ScannerScreen() {
   const [mode, setMode] = useState<ScanMode>("license");
@@ -23,10 +51,12 @@ export function ScannerScreen() {
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [showSuccess, setShowSuccess] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Abriendo cámara...");
-  const [isManualScanning, setIsManualScanning] = useState(false);
+  const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
   const [scanDebug, setScanDebug] = useState<LicenseScanDebug | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  const scanPaused = isProcessingPhoto || sheetOpen;
 
   const { videoRef, status, error, start, stop, captureFrame } = useCamera({
     enabled: cameraEnabled,
@@ -45,7 +75,7 @@ export function ScannerScreen() {
         setScanResult(result);
         setSheetOpen(true);
         setCameraEnabled(false);
-        setIsManualScanning(false);
+        setIsProcessingPhoto(false);
       }, SUCCESS_DELAY_MS);
     },
     [stop],
@@ -54,7 +84,7 @@ export function ScannerScreen() {
   useBarcodeScanner({
     videoRef,
     captureFrame,
-    enabled: cameraEnabled && mode === "license" && status === "active" && !sheetOpen,
+    enabled: cameraEnabled && mode === "license" && status === "active" && !scanPaused,
     onDetected: handleDetected,
     onStatus: setStatusMessage,
   });
@@ -62,7 +92,7 @@ export function ScannerScreen() {
   useMrzOcr({
     videoRef,
     captureFrame,
-    enabled: cameraEnabled && mode === "dpi" && status === "active" && !sheetOpen,
+    enabled: cameraEnabled && mode === "dpi" && status === "active" && !scanPaused,
     onDetected: handleDetected,
     onStatus: setStatusMessage,
   });
@@ -91,15 +121,21 @@ export function ScannerScreen() {
     void start();
   };
 
+  const handleOpenFilePicker = () => {
+    fileInputRef.current?.click();
+  };
+
   const handleManualScan = async () => {
-    if (isManualScanning || status !== "active") {
+    if (isProcessingPhoto || status !== "active") {
       return;
     }
 
-    setIsManualScanning(true);
+    setIsProcessingPhoto(true);
     setStatusMessage("Leyendo PDF417...");
 
     try {
+      await yieldToMain();
+
       if (mode === "dpi") {
         const result = await scanDpiNow(captureFrame);
         if (result) {
@@ -109,10 +145,7 @@ export function ScannerScreen() {
       } else {
         const canvas = captureFrame(undefined);
         if (canvas) {
-          const { result, debug } = await scanLicenseFromCanvasDetailed(canvas, {
-            exhaustive: true,
-            onProgress: setStatusMessage,
-          });
+          const { result, debug } = await scanLicensePhoto(canvas, setStatusMessage);
           setScanDebug(debug);
           if (result) {
             handleDetected(result);
@@ -121,9 +154,9 @@ export function ScannerScreen() {
         }
       }
 
-      setStatusMessage("No se leyó el código. Revisa el panel Debug abajo.");
+      setStatusMessage("No se leyó el código. Revisa Debug o intenta otra foto.");
     } finally {
-      setIsManualScanning(false);
+      setIsProcessingPhoto(false);
     }
   };
 
@@ -135,24 +168,22 @@ export function ScannerScreen() {
       return;
     }
 
-    setIsManualScanning(true);
-    setStatusMessage("Analizando foto completa (PDF417)...");
+    setIsProcessingPhoto(true);
+    setStatusMessage("Cargando imagen...");
 
     try {
+      await yieldToMain();
       const image = await loadImageFromFile(file);
       const canvas = imageToCanvas(image);
 
       if (mode === "dpi") {
-        const result = await scanDpiFromCanvas(canvas);
+        const result = await scanDpiPhoto(canvas);
         if (result) {
           handleDetected(result);
           return;
         }
       } else {
-        const { result, debug } = await scanLicenseFromCanvasDetailed(canvas, {
-          exhaustive: true,
-          onProgress: setStatusMessage,
-        });
+        const { result, debug } = await scanLicensePhoto(canvas, setStatusMessage);
         setScanDebug(debug);
 
         if (result) {
@@ -161,11 +192,11 @@ export function ScannerScreen() {
         }
       }
 
-      setStatusMessage("Sin lectura completa. Abre Debug para ver qué detectó.");
+      setStatusMessage("Sin lectura completa. Abre Debug para ver detalles.");
     } catch {
       setStatusMessage("Error al procesar la imagen.");
     } finally {
-      setIsManualScanning(false);
+      setIsProcessingPhoto(false);
     }
   };
 
@@ -201,16 +232,15 @@ export function ScannerScreen() {
             <button
               type="button"
               onClick={() => void handleManualScan()}
-              disabled={status !== "active" || isManualScanning}
+              disabled={status !== "active" || isProcessingPhoto}
               className="flex-1 rounded-xl bg-emerald-600 px-3 py-3 text-sm font-semibold text-white disabled:opacity-50 active:scale-[0.98]"
             >
-              {isManualScanning ? "Procesando..." : "Capturar ahora"}
+              {isProcessingPhoto ? "Procesando..." : "Capturar ahora"}
             </button>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isManualScanning}
-              className="rounded-xl bg-white/15 px-3 py-3 text-sm font-semibold text-white backdrop-blur-sm disabled:opacity-50 active:scale-[0.98]"
+              onClick={handleOpenFilePicker}
+              className="rounded-xl bg-white/15 px-3 py-3 text-sm font-semibold text-white backdrop-blur-sm active:scale-[0.98]"
             >
               Subir foto
             </button>
@@ -224,7 +254,6 @@ export function ScannerScreen() {
         ref={fileInputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         className="hidden"
         onChange={(event) => void handleFileSelected(event)}
       />

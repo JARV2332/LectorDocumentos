@@ -1,5 +1,5 @@
-import { ScannerScreen } from "@/components/scanner/ScannerScreen";
+import { HomeClient } from "./HomeClient";
 
 export default function Home() {
-  return <ScannerScreen />;
+  return <HomeClient />;
 }
