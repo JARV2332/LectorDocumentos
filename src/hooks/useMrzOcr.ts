@@ -1,47 +1,41 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
-import { parseDpiMrz } from "@/lib/parsers/mrzParser";
+import { useEffect, useRef } from "react";
+import { getDpiOcrWorker, scanDpiFromCanvas } from "@/lib/scanner/dpiScanner";
 import type { DpiScanResult } from "@/lib/types/documents";
+import { waitForVideoReady } from "@/lib/utils/videoReady";
 
 interface UseMrzOcrOptions {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   captureFrame: () => HTMLCanvasElement | null;
   enabled: boolean;
   onDetected: (result: DpiScanResult) => void;
+  onStatus?: (message: string) => void;
 }
 
-const SCAN_INTERVAL_MS = 1200;
+const SCAN_INTERVAL_MS = 1600;
 
 export function useMrzOcr({
   videoRef,
   captureFrame,
   enabled,
   onDetected,
+  onStatus,
 }: UseMrzOcrOptions): void {
   const processingRef = useRef(false);
   const detectedRef = useRef(false);
   const onDetectedRef = useRef(onDetected);
-  const workerRef = useRef<Awaited<
-    ReturnType<typeof import("tesseract.js")["createWorker"]>
-  > | null>(null);
+  const onStatusRef = useRef(onStatus);
 
   useEffect(() => {
     onDetectedRef.current = onDetected;
-  }, [onDetected]);
-
-  const stopWorker = useCallback(async () => {
-    if (workerRef.current) {
-      await workerRef.current.terminate();
-      workerRef.current = null;
-    }
-  }, []);
+    onStatusRef.current = onStatus;
+  }, [onDetected, onStatus]);
 
   useEffect(() => {
     detectedRef.current = false;
 
     if (!enabled) {
-      void stopWorker();
       return;
     }
 
@@ -49,21 +43,19 @@ export function useMrzOcr({
     let intervalId: ReturnType<typeof setInterval> | null = null;
 
     const bootstrap = async () => {
-      const { createWorker, PSM } = await import("tesseract.js");
+      onStatusRef.current?.("Cargando motor OCR (solo la 1ra vez)...");
+      const worker = await getDpiOcrWorker();
+
+      const video = videoRef.current;
+      if (video) {
+        await waitForVideoReady(video);
+      }
+
       if (cancelled) {
         return;
       }
 
-      const worker = await createWorker("eng", 1, {
-        logger: () => undefined,
-      });
-
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
-      });
-
-      workerRef.current = worker;
+      onStatusRef.current?.("Escaneando líneas IDGTM del reverso...");
 
       intervalId = setInterval(async () => {
         if (
@@ -71,7 +63,7 @@ export function useMrzOcr({
           detectedRef.current ||
           processingRef.current ||
           !videoRef.current ||
-          videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+          videoRef.current.videoWidth === 0
         ) {
           return;
         }
@@ -84,16 +76,13 @@ export function useMrzOcr({
         processingRef.current = true;
 
         try {
-          const cropped = cropMrzRegion(canvas);
-          const { data } = await worker.recognize(cropped);
-          const parsed = parseDpiMrz(data.text);
-
+          const parsed = await scanDpiFromCanvas(canvas, worker);
           if (parsed) {
             detectedRef.current = true;
             onDetectedRef.current(parsed);
           }
         } catch {
-          // OCR frame failures are expected during live scanning.
+          onStatusRef.current?.("Ajusta la luz y enfoca las 3 líneas inferiores.");
         } finally {
           processingRef.current = false;
         }
@@ -107,38 +96,18 @@ export function useMrzOcr({
       if (intervalId) {
         clearInterval(intervalId);
       }
-      void stopWorker();
     };
-  }, [captureFrame, enabled, stopWorker, videoRef]);
+  }, [captureFrame, enabled, videoRef]);
 }
 
-function cropMrzRegion(source: HTMLCanvasElement): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
-  const cropHeight = Math.floor(source.height * 0.35);
-  const cropY = source.height - cropHeight;
-
-  canvas.width = source.width;
-  canvas.height = cropHeight;
-
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return source;
+export async function scanDpiNow(
+  captureFrame: () => HTMLCanvasElement | null,
+): Promise<DpiScanResult | null> {
+  const canvas = captureFrame();
+  if (!canvas) {
+    return null;
   }
 
-  context.drawImage(
-    source,
-    0,
-    cropY,
-    source.width,
-    cropHeight,
-    0,
-    0,
-    source.width,
-    cropHeight,
-  );
-
-  context.filter = "contrast(1.4) brightness(1.05)";
-  context.drawImage(canvas, 0, 0);
-
-  return canvas;
+  const worker = await getDpiOcrWorker();
+  return scanDpiFromCanvas(canvas, worker);
 }

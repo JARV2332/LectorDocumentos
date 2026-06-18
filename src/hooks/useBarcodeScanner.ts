@@ -1,84 +1,109 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
-import {
-  BarcodeFormat,
-  BrowserMultiFormatReader,
-  DecodeHintType,
-  NotFoundException,
-} from "@zxing/library";
-import { parseAamvaBarcode } from "@/lib/parsers/aamvaParser";
+import { useEffect, useRef } from "react";
+import { NotFoundException } from "@zxing/library";
+import { scanLicenseFromCanvas } from "@/lib/scanner/licenseScanner";
 import type { LicenseScanResult } from "@/lib/types/documents";
+import { waitForVideoReady } from "@/lib/utils/videoReady";
 
 interface UseBarcodeScannerOptions {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  captureFrame: () => HTMLCanvasElement | null;
   enabled: boolean;
   onDetected: (result: LicenseScanResult) => void;
+  onStatus?: (message: string) => void;
 }
+
+const SCAN_INTERVAL_MS = 450;
 
 export function useBarcodeScanner({
   videoRef,
+  captureFrame,
   enabled,
   onDetected,
+  onStatus,
 }: UseBarcodeScannerOptions): void {
-  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const detectedRef = useRef(false);
+  const processingRef = useRef(false);
   const onDetectedRef = useRef(onDetected);
+  const onStatusRef = useRef(onStatus);
 
   useEffect(() => {
     onDetectedRef.current = onDetected;
-  }, [onDetected]);
-
-  const stopScanning = useCallback(() => {
-    readerRef.current?.reset();
-    readerRef.current = null;
-  }, []);
+    onStatusRef.current = onStatus;
+  }, [onDetected, onStatus]);
 
   useEffect(() => {
     detectedRef.current = false;
 
     if (!enabled) {
-      stopScanning();
       return;
     }
 
-    const video = videoRef.current;
-    if (!video) {
-      return;
-    }
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
-    const hints = new Map();
-    hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.PDF_417]);
-    hints.set(DecodeHintType.TRY_HARDER, true);
-
-    const reader = new BrowserMultiFormatReader(hints, 500);
-    readerRef.current = reader;
-
-    void reader.decodeFromVideoElementContinuously(video, (result, error) => {
-      if (detectedRef.current) {
+    const bootstrap = async () => {
+      const video = videoRef.current;
+      if (!video) {
+        onStatusRef.current?.("Esperando cámara...");
         return;
       }
 
-      if (error && !(error instanceof NotFoundException)) {
+      const ready = await waitForVideoReady(video);
+      if (!ready || cancelled) {
+        onStatusRef.current?.("Cámara lista. Acerca el código PDF417.");
         return;
       }
 
-      if (!result) {
-        return;
-      }
+      onStatusRef.current?.("Escaneando código PDF417...");
 
-      const parsed = parseAamvaBarcode(result.getText());
-      if (!parsed) {
-        return;
-      }
+      intervalId = setInterval(async () => {
+        if (cancelled || detectedRef.current || processingRef.current) {
+          return;
+        }
 
-      detectedRef.current = true;
-      stopScanning();
-      onDetectedRef.current(parsed);
-    });
+        const canvas = captureFrame();
+        if (!canvas) {
+          return;
+        }
+
+        processingRef.current = true;
+
+        try {
+          const parsed = await scanLicenseFromCanvas(canvas);
+          if (parsed) {
+            detectedRef.current = true;
+            onDetectedRef.current(parsed);
+          }
+        } catch (error) {
+          if (!(error instanceof NotFoundException)) {
+            onStatusRef.current?.("Escaneando... mantén el código dentro del recuadro.");
+          }
+        } finally {
+          processingRef.current = false;
+        }
+      }, SCAN_INTERVAL_MS);
+    };
+
+    void bootstrap();
 
     return () => {
-      stopScanning();
+      cancelled = true;
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
     };
-  }, [enabled, stopScanning, videoRef]);
+  }, [captureFrame, enabled, videoRef]);
+}
+
+export async function scanLicenseNow(
+  captureFrame: () => HTMLCanvasElement | null,
+): Promise<LicenseScanResult | null> {
+  const canvas = captureFrame();
+  if (!canvas) {
+    return null;
+  }
+
+  return scanLicenseFromCanvas(canvas);
 }

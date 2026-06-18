@@ -31,13 +31,14 @@ function extractFields(raw: string): Record<string, string> {
   return fields;
 }
 
-function extractCui(fields: Record<string, string>): string {
+function extractCui(fields: Record<string, string>, raw: string): string {
   const candidates = [
     fields.DAQ,
     fields.DCK,
     fields.DCI,
     fields.ZGT,
     fields.ZGTCUI,
+    fields.DBD,
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -47,7 +48,7 @@ function extractCui(fields: Record<string, string>): string {
     }
   }
 
-  const allDigits = Object.values(fields).join(" ").replace(/\D/g, "");
+  const allDigits = `${Object.values(fields).join(" ")} ${raw}`.replace(/\D/g, "");
   const cuiMatch = allDigits.match(/\d{13}/);
   return cuiMatch?.[0] ?? "";
 }
@@ -58,7 +59,7 @@ function extractLicenseType(fields: Record<string, string>): string {
       return fields[field];
     }
   }
-  return fields.DCA ?? "";
+  return fields.DCA ?? fields.DAW ?? "";
 }
 
 function formatName(value: string): string {
@@ -67,25 +68,50 @@ function formatName(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .split(" ")
+    .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
 }
 
+function extractFallbackNames(raw: string): { nombres: string; apellidos: string } {
+  const nameMatch = raw.match(/(?:DCS|DAB)([A-Z\s<]+)/);
+  const givenMatch = raw.match(/(?:DAC|DCT)([A-Z\s<]+)/);
+
+  return {
+    apellidos: formatName(nameMatch?.[1] ?? ""),
+    nombres: formatName(givenMatch?.[1] ?? ""),
+  };
+}
+
 export function parseAamvaBarcode(rawBarcode: string): LicenseScanResult | null {
-  if (!rawBarcode || rawBarcode.length < 20) {
+  if (!rawBarcode || rawBarcode.length < 10) {
     return null;
   }
 
   const fields = extractFields(rawBarcode);
-  const apellidos = formatName(fields.DCS ?? fields.DAB ?? "");
+  const fallbackNames = extractFallbackNames(rawBarcode);
+  const apellidos = formatName(fields.DCS ?? fields.DAB ?? fallbackNames.apellidos);
   const nombres = formatName(
-    [fields.DAC, fields.DAD].filter(Boolean).join(" ") || fields.DCT || "",
+    [fields.DAC, fields.DAD].filter(Boolean).join(" ") ||
+      fields.DCT ||
+      fallbackNames.nombres,
   );
-  const numeroLicencia = (fields.DAQ ?? fields.DCK ?? "").replace(/\s+/g, "");
-  const cui = extractCui(fields);
+  const numeroLicencia = (fields.DAQ ?? fields.DCK ?? fields.DCA ?? "").replace(/\s+/g, "");
+  const cui = extractCui(fields, rawBarcode);
   const tipoLicencia = extractLicenseType(fields);
 
   if (!numeroLicencia && !cui && !apellidos && !nombres) {
+    if (rawBarcode.length > 30) {
+      return {
+        type: "license",
+        numeroLicencia: rawBarcode.slice(0, 24).replace(/[^A-Z0-9]/gi, ""),
+        cui,
+        nombres: "",
+        apellidos: "",
+        tipoLicencia: "",
+        rawBarcode,
+      };
+    }
     return null;
   }
 

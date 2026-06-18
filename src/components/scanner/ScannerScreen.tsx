@@ -1,13 +1,16 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { CameraView } from "@/components/camera/CameraView";
 import { BottomNav } from "@/components/ui/BottomNav";
 import { ResultSheet } from "@/components/scanner/ResultSheet";
 import { useCamera } from "@/hooks/useCamera";
-import { useBarcodeScanner } from "@/hooks/useBarcodeScanner";
-import { useMrzOcr } from "@/hooks/useMrzOcr";
+import { scanLicenseNow, useBarcodeScanner } from "@/hooks/useBarcodeScanner";
+import { scanDpiNow, useMrzOcr } from "@/hooks/useMrzOcr";
+import { scanDpiFromCanvas } from "@/lib/scanner/dpiScanner";
+import { scanLicenseFromCanvas } from "@/lib/scanner/licenseScanner";
 import type { CameraStatus, ScanMode, ScanResult } from "@/lib/types/documents";
+import { imageToCanvas, loadImageFromFile } from "@/lib/utils/videoReady";
 
 const SUCCESS_DELAY_MS = 900;
 
@@ -17,6 +20,9 @@ export function ScannerScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("Abriendo cámara...");
+  const [isManualScanning, setIsManualScanning] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const { videoRef, status, error, start, stop, captureFrame } = useCamera({
     enabled: cameraEnabled,
@@ -27,12 +33,14 @@ export function ScannerScreen() {
   const handleDetected = useCallback(
     (result: ScanResult) => {
       setShowSuccess(true);
+      setStatusMessage("Documento detectado.");
       stop();
 
       window.setTimeout(() => {
         setScanResult(result);
         setSheetOpen(true);
         setCameraEnabled(false);
+        setIsManualScanning(false);
       }, SUCCESS_DELAY_MS);
     },
     [stop],
@@ -40,8 +48,10 @@ export function ScannerScreen() {
 
   useBarcodeScanner({
     videoRef,
+    captureFrame,
     enabled: cameraEnabled && mode === "license" && status === "active" && !sheetOpen,
     onDetected: handleDetected,
+    onStatus: setStatusMessage,
   });
 
   useMrzOcr({
@@ -49,6 +59,7 @@ export function ScannerScreen() {
     captureFrame,
     enabled: cameraEnabled && mode === "dpi" && status === "active" && !sheetOpen,
     onDetected: handleDetected,
+    onStatus: setStatusMessage,
   });
 
   const handleModeChange = (nextMode: ScanMode) => {
@@ -61,6 +72,7 @@ export function ScannerScreen() {
     setSheetOpen(false);
     setShowSuccess(false);
     setCameraEnabled(true);
+    setStatusMessage("Cambiando modo de escaneo...");
   };
 
   const handleScanAgain = () => {
@@ -68,11 +80,67 @@ export function ScannerScreen() {
     setSheetOpen(false);
     setShowSuccess(false);
     setCameraEnabled(true);
+    setStatusMessage("Preparando cámara...");
     void start();
   };
 
-  const handleCloseSheet = () => {
-    setSheetOpen(false);
+  const handleManualScan = async () => {
+    if (isManualScanning || status !== "active") {
+      return;
+    }
+
+    setIsManualScanning(true);
+    setStatusMessage("Capturando frame...");
+
+    try {
+      const result =
+        mode === "dpi" ? await scanDpiNow(captureFrame) : await scanLicenseNow(captureFrame);
+
+      if (result) {
+        handleDetected(result);
+        return;
+      }
+
+      setStatusMessage(
+        mode === "dpi"
+          ? "No se leyó el MRZ. Enfoca el reverso del DPI o sube una foto."
+          : "No se leyó el PDF417. Acerca más el código o sube una foto.",
+      );
+    } finally {
+      setIsManualScanning(false);
+    }
+  };
+
+  const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    setIsManualScanning(true);
+    setStatusMessage("Procesando foto...");
+
+    try {
+      const image = await loadImageFromFile(file);
+      const canvas = imageToCanvas(image);
+      const result =
+        mode === "dpi"
+          ? await scanDpiFromCanvas(canvas)
+          : await scanLicenseFromCanvas(canvas);
+
+      if (result) {
+        handleDetected(result);
+        return;
+      }
+
+      setStatusMessage("No se detectó información en la foto. Intenta con mejor luz y enfoque.");
+    } catch {
+      setStatusMessage("Error al procesar la imagen.");
+    } finally {
+      setIsManualScanning(false);
+    }
   };
 
   return (
@@ -81,12 +149,12 @@ export function ScannerScreen() {
         <h1 className="text-lg font-bold text-white">Lector ID Guatemala</h1>
         <p className="text-xs text-white/75">
           {mode === "dpi"
-            ? "Escanea el reverso del DPI (MRZ)"
-            : "Escanea el código PDF417 de la licencia"}
+            ? "Reverso del DPI — 3 líneas con IDGTM"
+            : "Reverso de la licencia — código PDF417"}
         </p>
       </header>
 
-      <main className="relative min-h-0 flex-1 pb-[calc(4.75rem+env(safe-area-inset-bottom))]">
+      <main className="relative min-h-0 flex-1 pb-[calc(7.5rem+env(safe-area-inset-bottom))]">
         <CameraView
           videoRef={videoRef}
           mode={mode}
@@ -95,23 +163,47 @@ export function ScannerScreen() {
           onRetry={() => void start()}
         />
 
-        {status === "active" && !sheetOpen && (
-          <div className="absolute bottom-24 left-0 right-0 flex justify-center px-4">
-            <div className="rounded-full bg-black/55 px-4 py-2 text-xs font-medium text-white backdrop-blur-sm">
-              {mode === "dpi"
-                ? "Buscando líneas IDGTM..."
-                : "Buscando código PDF417..."}
-            </div>
+        <div className="absolute bottom-28 left-0 right-0 z-20 space-y-2 px-4">
+          <div className="rounded-2xl bg-black/60 px-4 py-2 text-center text-xs font-medium text-white backdrop-blur-sm">
+            {statusMessage}
           </div>
-        )}
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void handleManualScan()}
+              disabled={status !== "active" || isManualScanning}
+              className="flex-1 rounded-xl bg-emerald-600 px-3 py-3 text-sm font-semibold text-white disabled:opacity-50 active:scale-[0.98]"
+            >
+              {isManualScanning ? "Procesando..." : "Capturar ahora"}
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isManualScanning}
+              className="rounded-xl bg-white/15 px-3 py-3 text-sm font-semibold text-white backdrop-blur-sm disabled:opacity-50 active:scale-[0.98]"
+            >
+              Subir foto
+            </button>
+          </div>
+        </div>
       </main>
 
       <BottomNav mode={mode} onChange={handleModeChange} />
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(event) => void handleFileSelected(event)}
+      />
+
       <ResultSheet
         result={scanResult}
         open={sheetOpen}
-        onClose={handleCloseSheet}
+        onClose={() => setSheetOpen(false)}
         onScanAgain={handleScanAgain}
       />
     </div>

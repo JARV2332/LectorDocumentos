@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CameraStatus } from "@/lib/types/documents";
+import {
+  captureVideoFrame,
+  getCameraStream,
+  waitForVideoReady,
+} from "@/lib/utils/videoReady";
 
 interface UseCameraOptions {
   enabled?: boolean;
@@ -53,53 +58,39 @@ export function useCamera(options: UseCameraOptions = {}): UseCameraReturn {
     try {
       setError(null);
       setInternalStatus("requesting");
+      stopStream();
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-        audio: false,
-      });
-
+      const stream = await getCameraStream();
       streamRef.current = stream;
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", "true");
-        await videoRef.current.play();
+      const video = videoRef.current;
+      if (video) {
+        video.srcObject = stream;
+        video.setAttribute("playsinline", "true");
+        video.muted = true;
+        await video.play();
+        await waitForVideoReady(video);
       }
 
       setInternalStatus("active");
     } catch (err) {
       const message =
         err instanceof DOMException && err.name === "NotAllowedError"
-          ? "Permiso de cámara denegado. Habilítalo en la configuración del navegador."
-          : "No se pudo acceder a la cámara trasera.";
+          ? "Permiso de cámara denegado. Tócalo en la barra del navegador y elige Permitir."
+          : "No se pudo abrir la cámara. Prueba subir una foto del documento.";
 
       setError(message);
       setInternalStatus("error");
     }
-  }, [enabled]);
+  }, [enabled, stopStream]);
 
   const captureFrame = useCallback((): HTMLCanvasElement | null => {
     const video = videoRef.current;
-    if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    if (!video) {
       return null;
     }
 
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return null;
-    }
-
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas;
+    return captureVideoFrame(video);
   }, []);
 
   useEffect(() => {
