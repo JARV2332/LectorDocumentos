@@ -5,6 +5,15 @@ export function isValidGuatemalaCui(value: string): boolean {
     return false;
   }
 
+  if (/^(\d)\1{12}$/.test(cui)) {
+    return false;
+  }
+
+  const zeroCount = (cui.match(/0/g) ?? []).length;
+  if (zeroCount >= 10) {
+    return false;
+  }
+
   let sum = 0;
   for (let index = 0; index < 12; index += 1) {
     sum += Number.parseInt(cui[index], 10) * (index + 2);
@@ -89,6 +98,10 @@ export function isValidLicenseNumber(value: string): boolean {
     return false;
   }
 
+  if (/^0+$/.test(cleaned)) {
+    return false;
+  }
+
   if (/^\d{6,13}$/.test(cleaned)) {
     return true;
   }
@@ -107,6 +120,13 @@ export function findLicenseSerialInText(text: string): string {
 
   const eightDigitMatches = text.match(/\b(\d{8})\b/g) ?? [];
   for (const match of eightDigitMatches) {
+    if (isValidLicenseNumber(match) && !looksLikeDateDigits(match)) {
+      return match;
+    }
+  }
+
+  const sixToTen = text.match(/\b(\d{6,10})\b/g) ?? [];
+  for (const match of sixToTen) {
     if (isValidLicenseNumber(match) && !looksLikeDateDigits(match)) {
       return match;
     }

@@ -4,12 +4,14 @@ import { useCallback, useRef, useState } from "react";
 import { CameraView } from "@/components/camera/CameraView";
 import { BottomNav } from "@/components/ui/BottomNav";
 import { ResultSheet } from "@/components/scanner/ResultSheet";
+import { ScanDebugPanel } from "@/components/scanner/ScanDebugPanel";
 import { useCamera } from "@/hooks/useCamera";
-import { scanLicenseNow, useBarcodeScanner } from "@/hooks/useBarcodeScanner";
+import { useBarcodeScanner } from "@/hooks/useBarcodeScanner";
 import { scanDpiNow, useMrzOcr } from "@/hooks/useMrzOcr";
 import { scanDpiFromCanvas } from "@/lib/scanner/dpiScanner";
-import { scanLicenseFromCanvas } from "@/lib/scanner/licenseScanner";
+import { scanLicenseFromCanvasDetailed } from "@/lib/scanner/licenseScanner";
 import type { CameraStatus, ScanMode, ScanResult } from "@/lib/types/documents";
+import type { LicenseScanDebug } from "@/lib/types/scanDebug";
 import { imageToCanvas, loadImageFromFile } from "@/lib/utils/videoReady";
 
 const SUCCESS_DELAY_MS = 900;
@@ -22,6 +24,7 @@ export function ScannerScreen() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Abriendo cámara...");
   const [isManualScanning, setIsManualScanning] = useState(false);
+  const [scanDebug, setScanDebug] = useState<LicenseScanDebug | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -73,6 +76,7 @@ export function ScannerScreen() {
     setScanResult(null);
     setSheetOpen(false);
     setShowSuccess(false);
+    setScanDebug(null);
     setCameraEnabled(true);
     setStatusMessage("Cambiando modo de escaneo...");
   };
@@ -81,6 +85,7 @@ export function ScannerScreen() {
     setScanResult(null);
     setSheetOpen(false);
     setShowSuccess(false);
+    setScanDebug(null);
     setCameraEnabled(true);
     setStatusMessage("Preparando cámara...");
     void start();
@@ -92,22 +97,31 @@ export function ScannerScreen() {
     }
 
     setIsManualScanning(true);
-    setStatusMessage("Leyendo código de abajo...");
+    setStatusMessage("Leyendo PDF417...");
 
     try {
-      const result =
-        mode === "dpi" ? await scanDpiNow(captureFrame) : await scanLicenseNow(captureFrame);
-
-      if (result) {
-        handleDetected(result);
-        return;
+      if (mode === "dpi") {
+        const result = await scanDpiNow(captureFrame);
+        if (result) {
+          handleDetected(result);
+          return;
+        }
+      } else {
+        const canvas = captureFrame(undefined);
+        if (canvas) {
+          const { result, debug } = await scanLicenseFromCanvasDetailed(canvas, {
+            exhaustive: true,
+            onProgress: setStatusMessage,
+          });
+          setScanDebug(debug);
+          if (result) {
+            handleDetected(result);
+            return;
+          }
+        }
       }
 
-      setStatusMessage(
-        mode === "dpi"
-          ? "No se leyó el MRZ. Enfoca el reverso del DPI o sube una foto."
-          : "No se leyó el PDF417 de abajo. Acércalo más o sube una foto.",
-      );
+      setStatusMessage("No se leyó el código. Revisa el panel Debug abajo.");
     } finally {
       setIsManualScanning(false);
     }
@@ -122,22 +136,32 @@ export function ScannerScreen() {
     }
 
     setIsManualScanning(true);
-    setStatusMessage("Procesando foto del reverso...");
+    setStatusMessage("Analizando foto completa (PDF417)...");
 
     try {
       const image = await loadImageFromFile(file);
       const canvas = imageToCanvas(image);
-      const result =
-        mode === "dpi"
-          ? await scanDpiFromCanvas(canvas)
-          : await scanLicenseFromCanvas(canvas);
 
-      if (result) {
-        handleDetected(result);
-        return;
+      if (mode === "dpi") {
+        const result = await scanDpiFromCanvas(canvas);
+        if (result) {
+          handleDetected(result);
+          return;
+        }
+      } else {
+        const { result, debug } = await scanLicenseFromCanvasDetailed(canvas, {
+          exhaustive: true,
+          onProgress: setStatusMessage,
+        });
+        setScanDebug(debug);
+
+        if (result) {
+          handleDetected(result);
+          return;
+        }
       }
 
-      setStatusMessage("No se detectó el código. Foto del reverso, buena luz, código de abajo visible.");
+      setStatusMessage("Sin lectura completa. Abre Debug para ver qué detectó.");
     } catch {
       setStatusMessage("Error al procesar la imagen.");
     } finally {
@@ -170,6 +194,8 @@ export function ScannerScreen() {
           <div className="rounded-2xl bg-black/60 px-4 py-2 text-center text-xs font-medium text-white backdrop-blur-sm">
             {statusMessage}
           </div>
+
+          <ScanDebugPanel debug={scanDebug} />
 
           <div className="flex gap-2">
             <button
